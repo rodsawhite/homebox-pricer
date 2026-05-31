@@ -47,9 +47,10 @@ NVIDIA driver present (RTX 3070).
 
 ### VRAM & RAM headroom
 
-- [ ] 🟢 Sanity-check the VRAM budget: the single model `qwen2.5vl:3b` uses ~3–4 GB of the
-      3070's **8 GB VRAM**, leaving room for image tokens and context. (VRAM is the GPU's
-      own memory — separate from the WSL system-RAM cap below.)
+- [ ] 🟢 Sanity-check the VRAM budget: the local text model `qwen2.5:3b` uses ~2–3 GB of the
+      3070's **8 GB VRAM** (capture/vision runs in the cloud on Claude Haiku 4.5, so it does
+      not consume VRAM). Plenty of headroom. (VRAM is the GPU's own memory — separate from
+      the WSL system-RAM cap below.)
 - [ ] 🔴 (If containers feel starved) raise the WSL2 **system RAM** cap in
       `%UserProfile%\.wslconfig` — this governs host RAM for the containers/Ollama overhead,
       not VRAM:
@@ -94,12 +95,16 @@ iPhone.
 - [ ] Write `docker-compose.yml` with three services: `homebox-companion`, `ollama`, `price-lookup`
 - [ ] Add GPU `deploy.resources` block to the `ollama` service
 - [ ] Add a healthcheck to `ollama`; make `homebox-companion` and `price-lookup` depend on it
-- [ ] Create `.env.example` and document every variable
+- [ ] Create `.env.example` and document every variable (incl. `HBC_LLM_API_KEY` Anthropic key)
+- [ ] Configure Companion for Claude Haiku 4.5: `HBC_LLM_MODEL=anthropic/claude-haiku-4-5`,
+      Anthropic key in `HBC_LLM_API_KEY`, `HBC_LLM_API_BASE` left blank
+- [ ] **Verify the Companion↔Anthropic assumption**: confirm the Companion build accepts an
+      Anthropic provider and this model alias (check its LLM config docs); adjust env names/format if needed
 - [ ] Bring the stack up with a placeholder `price-lookup` (health endpoint only)
-- [ ] Pull the single model: `qwen2.5vl:3b` (serves both capture and price parsing)
-- [ ] Verify Companion reaches Ollama and Homebox (do one test capture end-to-end)
+- [ ] Pull the local text model: `qwen2.5:3b` (price parsing only; capture is cloud)
+- [ ] Verify Companion reaches Anthropic and Homebox (do one test capture end-to-end)
 
-**Done when:** a photo taken on the iPhone creates an item in Homebox, and `price-lookup` answers `/health`.
+**Done when:** a photo taken on the iPhone creates an item in Homebox (via Claude Haiku 4.5), and `price-lookup` answers `/health`.
 
 ---
 
@@ -121,7 +126,7 @@ iPhone.
 
 - [ ] Add `duckduckgo_search` (DDGS) to dependencies
 - [ ] `pricing.py` — build query from name + manufacturer + model, search region `au-en`
-- [ ] Pass titles + snippets to Ollama `qwen2.5vl:3b` (text-only use) with a strict JSON-output prompt
+- [ ] Pass titles + snippets to Ollama `qwen2.5:3b` (local text model) with a strict JSON-output prompt
 - [ ] Parse model output → `{price, currency, source, confidence, reason}`
 - [ ] AUD disambiguation: prefer `.com.au` / explicit `AUD`; mark `$`-only results low-confidence
 - [ ] Store results back on the candidate rows

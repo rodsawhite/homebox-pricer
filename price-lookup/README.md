@@ -12,7 +12,7 @@ Every `CHECK_INTERVAL` seconds (default hourly) the sidecar:
 
 1. Pulls all items from Homebox and keeps the ones with no `purchasePrice`.
 2. Builds a search query from the item's name, manufacturer, and model number.
-3. Searches DuckDuckGo (region `au-en`) and feeds the result snippets to the local model (`qwen2.5vl:3b` via Ollama — the same vision model used for capture, here used text-only) that extracts a price as structured JSON.
+3. Searches DuckDuckGo (region `au-en`) and feeds the result snippets to a lean local text model (`qwen2.5:3b` via Ollama) that extracts a price as structured JSON. (Capture/vision runs separately on Claude Haiku 4.5 in the cloud; this sidecar only does text.)
 4. Stores each result as a **pending candidate** in its own SQLite DB.
 5. Waits for you to Approve / Reject / Edit in the review queue at `:8090`.
 6. On approval, reads the full item from Homebox, sets the price, and writes it back with **PUT** (the full object — PATCH is unreliable on Homebox items).
@@ -32,7 +32,7 @@ Read from environment variables (see the root [`.env.example`](../.env.example))
 | `HOMEBOX_USER` | – | Login email, for automatic token refresh |
 | `HOMEBOX_PASSWORD` | – | Login password, for automatic token refresh |
 | `OLLAMA_URL` | `http://ollama:11434` | Ollama endpoint for price parsing |
-| `PRICE_TEXT_MODEL` | `qwen2.5vl:3b` | Model used to extract prices (same one used for capture) |
+| `PRICE_TEXT_MODEL` | `qwen2.5:3b` | Local Ollama text model used to extract prices |
 | `PRICE_REGION` | `au-en` | DuckDuckGo region |
 | `PRICE_CURRENCY` | `AUD` | Expected currency |
 | `PRICE_MIN_CONFIDENCE` | `low` | Hide candidates below this in the queue (`low`/`medium`/`high`) |

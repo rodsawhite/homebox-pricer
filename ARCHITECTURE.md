@@ -2,22 +2,28 @@
 
 ## Overview
 
-Three containers plus an external Homebox instance. Only one container (`price-lookup`) is original to this repo; the other two are upstream images wired together.
+Three containers plus an external Homebox instance and a cloud vision API. Only one container (`price-lookup`) is original to this repo; the other two are upstream images wired together. Capture/image recognition is offloaded to Anthropic's Claude Haiku 4.5 (cloud); the local Ollama model is used only for price-text parsing.
 
 ```
+                                          ┌──────────────────────┐
+                                          │   Anthropic API      │
+                                          │   Claude Haiku 4.5   │
+                                          │   (cloud vision)     │
+                                          └──────────────────────┘
+                                                     ▲
+                                          identify   │
                          ┌─────────────────────────────────────────┐
                          │              Docker (WSL2)               │
                          │                                          │
    iPhone browser        │   ┌──────────────────┐                   │
        │                 │   │ homebox-companion│                   │
        ├── :8000 ────────┼──▶│  capture + AI    │──┐                │
-       │  (capture)      │   └──────────────────┘  │                │
-       │                 │            │            │ creates items  │
-       │                 │            ▼            │                │
+       │  (capture)      │   └──────────────────┘  │ creates items  │
+       │                 │                          │                │
        │                 │   ┌──────────────────┐  │                │
        │                 │   │     ollama       │  │                │
-       │                 │   │  qwen2.5vl:3b    │  │                │
-       │                 │   │  (vision + text) │  │                │
+       │                 │   │  qwen2.5:3b      │  │                │
+       │                 │   │  (text, pricing) │  │                │
        │                 │   └──────────────────┘  │                │
        │                 │            ▲            │                │
        │                 │            │ price parse│                │
@@ -44,11 +50,11 @@ Three containers plus an external Homebox instance. Only one container (`price-l
 ### Capture path (handled entirely by upstream Companion)
 
 1. User selects a Homebox location, then photographs items.
-2. Companion sends images to Ollama (`qwen2.5vl:3b`) for identification.
+2. Companion sends images to **Claude Haiku 4.5** (Anthropic API) for identification.
 3. User reviews/edits the AI's suggestions.
 4. Companion creates items in Homebox via the API, attaching photos.
 
-The capture path needs no code from us — it works out of the box once Companion is pointed at Ollama and Homebox.
+The capture path needs no code from us — it works out of the box once Companion is pointed at the Anthropic API (key + `anthropic/claude-haiku-4-5`) and Homebox.
 
 ### Pricing path (the sidecar — what we build)
 
@@ -70,8 +76,7 @@ The capture path needs no code from us — it works out of the box once Companio
 4. Search via duckduckgo_search (DDGS().text(...))
             │
             ▼
-5. Feed result titles + snippets to Ollama (`qwen2.5vl:3b`, the same model, used
-   text-only here):
+5. Feed result titles + snippets to Ollama (`qwen2.5:3b`, a lean local text model):
    "Extract the current AUD new retail price. Return JSON:
     {price: number|null, currency: string, source: string,
      confidence: 'high'|'medium'|'low', reason: string}"
@@ -157,22 +162,28 @@ price-lookup/
 
 | Job | Model | Why |
 | --- | --- | --- |
-| Image → item identity **and** search snippets → price | `qwen2.5vl:3b` | One vision-language model covers both jobs. At Q4 it's ~3–4 GB, fitting comfortably in the RTX 3070's 8 GB VRAM with headroom for image tokens and context. |
+| Image → item identity (capture) | `claude-haiku-4-5` (Anthropic, cloud) | Strong, fast vision at low cost. Removes the local VRAM/throughput constraint on capture and gives noticeably better item identification than a small local vision model. Configured in Companion as `anthropic/claude-haiku-4-5`. |
+| Search snippets → price (pricing) | `qwen2.5:3b` (Ollama, local) | Interpreting messy search snippets is a text task; a small local text model handles it well, keeps the price sweeps free of API cost, and stays resident in a couple of GB of VRAM. Far more reliable than regex alone, which cannot distinguish a product price from shipping, an old sale price, or an unrelated number. |
 
-**Why one model, not two.** The 8 GB card can't hold a 7B vision model *and* a separate
-text model at once — Ollama would swap them in and out on every price sweep, adding latency
-and complexity. A single 3B vision-language model does both jobs and stays resident. Using
-a capable model to interpret messy search snippets is far more reliable than regex alone,
-which cannot distinguish a product price from shipping, an old sale price, or an unrelated
-number on the page.
+**Why split capture and pricing across two models.** Capture quality benefits most from a
+capable vision model, and Claude Haiku 4.5 delivers that without competing for the GPU.
+Pricing is high-frequency (hourly sweeps over many items) and purely text, so running it on
+a small *local* model keeps recurring cost at zero and latency predictable. The earlier
+single-local-model design existed only to fit one vision model in 8 GB VRAM — moving vision
+to the cloud removes that constraint entirely.
 
-**Tuning for 8 GB.** Keep Ollama's context modest (e.g. `num_ctx` 4096–8192) to bound KV
-cache, and downscale very large iPhone photos before sending them so image tokens don't
-blow the VRAM budget.
+**Cost note.** Capture now incurs Anthropic API usage (a handful of image requests per
+capture session). Pricing remains free/local. For a fully offline capture path later, point
+`HBC_LLM_MODEL` back at a local Ollama vision model (e.g. `ollama/qwen2.5vl:3b`) — the rest
+of the stack is unaffected.
 
-**If 3B identification proves too weak.** Step up to `qwen2.5vl:7b` and accept that the
-hourly price sweeps will trigger a model swap (the 7B fills most of the 8 GB on its own).
-That's a one-line change to `HBC_LLM_MODEL` / `PRICE_TEXT_MODEL`.
+**Tuning for 8 GB.** With only the text model resident, VRAM is no longer tight; keep
+Ollama's context modest (e.g. `num_ctx` 4096–8192) to bound KV cache.
+
+> **Assumption to verify (Phase 1).** Companion is configured here via a LiteLLM-style model
+> string (`anthropic/claude-haiku-4-5`) with the Anthropic key in `HBC_LLM_API_KEY`. Confirm
+> the running Companion build accepts Anthropic providers and the exact model alias before
+> relying on it; adjust the env var names/format to match Companion's actual LLM config if needed.
 
 ---
 
