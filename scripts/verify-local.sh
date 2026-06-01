@@ -3,13 +3,29 @@
 # .env (Anthropic key, Homebox token) are available. CI cannot do these steps
 # because they need a Docker daemon and real secrets.
 #
-# It is safe to re-run. Pass --no-build to skip the image build.
+# Usage:
+#   scripts/verify-local.sh [--no-build] [--with-companion]
+#
+#   --no-build        Skip the price-lookup image build (reuse the last one).
+#   --with-companion  Also start homebox-companion and probe its :8090 UI.
+#                     Confirms it boots and loads the Anthropic key; it does
+#                     NOT perform a real photo capture (that's a manual phone
+#                     test). Requires HBC_LLM_API_KEY in .env.
+#
+# It is safe to re-run.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 BUILD=1
-[[ "${1:-}" == "--no-build" ]] && BUILD=0
+WITH_COMPANION=0
+for arg in "$@"; do
+  case "$arg" in
+    --no-build) BUILD=0 ;;
+    --with-companion) WITH_COMPANION=1 ;;
+    *) echo "unknown arg: $arg" >&2; exit 2 ;;
+  esac
+done
 
 step() { printf '\n\033[1;34m==> %s\033[0m\n' "$1"; }
 
@@ -48,9 +64,10 @@ else
 fi
 
 step "Probing /health (up to ~30s)"
+# price-lookup publishes on host port 8091 (8090 is Homebox Companion).
 ok=0
 for _ in $(seq 1 15); do
-  if curl -fsS http://localhost:8090/health | grep -q '"status":"ok"'; then
+  if curl -fsS http://localhost:8091/health | grep -q '"status":"ok"'; then
     ok=1; break
   fi
   sleep 2
@@ -58,12 +75,38 @@ done
 
 if [[ "$ok" == "1" ]]; then
   echo "health OK:"
-  curl -fsS http://localhost:8090/health; echo
+  curl -fsS http://localhost:8091/health; echo
   echo "status:"
-  curl -fsS http://localhost:8090/status; echo
-  printf '\n\033[1;32mPhase 1 local verification passed.\033[0m\n'
+  curl -fsS http://localhost:8091/status; echo
 else
   echo "health check FAILED — recent logs:"
   docker compose logs --tail=50 price-lookup
   exit 1
 fi
+
+if [[ "$WITH_COMPANION" == "1" ]]; then
+  step "Bringing up homebox-companion"
+  docker compose up -d homebox-companion
+
+  step "Probing Companion UI on :8090 (up to ~30s)"
+  cok=0
+  for _ in $(seq 1 15); do
+    # Companion serves its UI on 8090; any HTTP response means it booted.
+    if curl -fsS -o /dev/null http://localhost:8090/; then
+      cok=1; break
+    fi
+    sleep 2
+  done
+
+  if [[ "$cok" == "1" ]]; then
+    echo "Companion UI reachable on http://localhost:8090/"
+    echo "NOTE: this confirms Companion booted and loaded its config; it does"
+    echo "      NOT verify a real photo capture — do that from the iPhone."
+  else
+    echo "Companion did NOT respond — recent logs (check HBC_LLM_API_KEY):"
+    docker compose logs --tail=50 homebox-companion
+    exit 1
+  fi
+fi
+
+printf '\n\033[1;32mPhase 1 local verification passed.\033[0m\n'
