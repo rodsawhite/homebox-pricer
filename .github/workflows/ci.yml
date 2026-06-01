@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install price-lookup (with dev deps)
+        working-directory: price-lookup
+        run: uv pip install --system ".[dev]"
+
+      - name: Run tests
+        working-directory: price-lookup
+        run: pytest -q
+
+  compose-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate docker-compose.yml
+        # `docker compose` ships on GitHub-hosted runners. Provide the required
+        # vars so interpolation succeeds; this only lints the file, nothing runs.
+        env:
+          HOMEBOX_URL: http://example.invalid:3900
+          HBC_LLM_API_KEY: dummy-key
+        run: docker compose config >/dev/null

@@ -1,0 +1,75 @@
+# Homebox Pricer stack.
+#
+# Three services: the upstream Homebox Companion (capture UI), a local Ollama
+# (price-text parsing only — capture vision runs on Claude Haiku 4.5 in the
+# cloud), and the price-lookup sidecar built from ./price-lookup.
+#
+# Homebox itself is NOT managed here — it runs separately on the NAS.
+# Copy .env.example to .env and fill it in before `docker compose up`.
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    volumes:
+      - ollama:/root/.ollama
+    healthcheck:
+      # Ollama serves its version endpoint once ready.
+      test: ["CMD-SHELL", "ollama --version >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  homebox-companion:
+    image: ghcr.io/duelion/homebox-companion:latest
+    container_name: homebox-companion
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # Capture/image recognition uses Anthropic Claude Haiku 4.5 (cloud).
+      HBC_LLM_API_KEY: ${HBC_LLM_API_KEY}
+      HBC_LLM_API_BASE: ${HBC_LLM_API_BASE:-}
+      HBC_LLM_MODEL: ${HBC_LLM_MODEL:-anthropic/claude-haiku-4-5}
+      HBC_HOMEBOX_URL: ${HBC_HOMEBOX_URL:-${HOMEBOX_URL}}
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+  price-lookup:
+    build: ./price-lookup
+    container_name: price-lookup
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+    environment:
+      HOMEBOX_URL: ${HOMEBOX_URL}
+      HOMEBOX_TOKEN: ${HOMEBOX_TOKEN:-}
+      HOMEBOX_USER: ${HOMEBOX_USER:-}
+      HOMEBOX_PASSWORD: ${HOMEBOX_PASSWORD:-}
+      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
+      PRICE_TEXT_MODEL: ${PRICE_TEXT_MODEL:-qwen2.5:3b}
+      PRICE_REGION: ${PRICE_REGION:-au-en}
+      PRICE_CURRENCY: ${PRICE_CURRENCY:-AUD}
+      PRICE_MIN_CONFIDENCE: ${PRICE_MIN_CONFIDENCE:-low}
+      CHECK_INTERVAL: ${CHECK_INTERVAL:-3600}
+      SERVER_PORT: ${SERVER_PORT:-8090}
+      DB_PATH: ${DB_PATH:-/data/price.db}
+    volumes:
+      - price-data:/data
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+volumes:
+  ollama:
+  price-data:
