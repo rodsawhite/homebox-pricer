@@ -180,6 +180,15 @@ of the stack is unaffected.
 **Tuning for 8 GB.** With only the text model resident, VRAM is no longer tight; keep
 Ollama's context modest (e.g. `num_ctx` 4096–8192) to bound KV cache.
 
+**Model provisioning.** The `ollama/ollama` image ships empty — it contains no models.
+Rather than rely on a manual `ollama pull`, the stack includes a one-shot `ollama-init`
+service that pulls `PRICE_TEXT_MODEL` into the shared `ollama` volume once the daemon is
+healthy, then exits. `price-lookup` depends on it with
+`condition: service_completed_successfully`, so it cannot start (and therefore cannot run a
+sweep against a missing model) until the pull finishes. The pull is idempotent and cached in
+the volume, so restarts are instant. Changing the model is an `.env` edit plus a restart of
+`ollama-init` — no rebuild.
+
 > **Assumption to verify (Phase 1).** Companion is configured here via a LiteLLM-style model
 > string (`anthropic/claude-haiku-4-5`) with the Anthropic key in `HBC_LLM_API_KEY`. Confirm
 > the running Companion build accepts Anthropic providers and the exact model alias before

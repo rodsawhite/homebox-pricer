@@ -92,17 +92,17 @@ iPhone.
 
 ## Phase 1 — Stack skeleton
 
-- [ ] Write `docker-compose.yml` with three services: `homebox-companion`, `ollama`, `price-lookup`
-- [ ] Add GPU `deploy.resources` block to the `ollama` service
-- [ ] Add a healthcheck to `ollama`; make `homebox-companion` and `price-lookup` depend on it
-- [ ] Create `.env.example` and document every variable (incl. `HBC_LLM_API_KEY` Anthropic key)
-- [ ] Configure Companion for Claude Haiku 4.5: `HBC_LLM_MODEL=anthropic/claude-haiku-4-5`,
+- [x] Write `docker-compose.yml` with services: `homebox-companion`, `ollama`, `ollama-init`, `price-lookup`
+- [x] Add GPU `deploy.resources` block to the `ollama` service
+- [x] Add a healthcheck to `ollama` (true daemon readiness via `ollama list`); make `homebox-companion` and `price-lookup` depend on it
+- [x] Auto-provision the model: `ollama-init` one-shot pulls `PRICE_TEXT_MODEL` into the shared volume; `price-lookup` waits on `service_completed_successfully` (no manual pull)
+- [x] Create `.env.example` and document every variable (incl. `HBC_LLM_API_KEY` Anthropic key)
+- [x] Configure Companion for Claude Haiku 4.5: `HBC_LLM_MODEL=anthropic/claude-haiku-4-5`,
       Anthropic key in `HBC_LLM_API_KEY`, `HBC_LLM_API_BASE` left blank
 - [ ] **Verify the Companion↔Anthropic assumption**: confirm the Companion build accepts an
       Anthropic provider and this model alias (check its LLM config docs); adjust env names/format if needed
-- [ ] Bring the stack up with a placeholder `price-lookup` (health endpoint only)
-- [ ] Pull the local text model: `qwen2.5:3b` (price parsing only; capture is cloud)
-- [ ] Verify Companion reaches Anthropic and Homebox (do one test capture end-to-end)
+- [x] Bring the stack up with a placeholder `price-lookup` (health endpoint only)
+- [ ] Verify Companion reaches Anthropic and Homebox (do one test capture end-to-end) — run `scripts/verify-local.sh` on the host
 
 **Done when:** a photo taken on the iPhone creates an item in Homebox (via Claude Haiku 4.5), and `price-lookup` answers `/health`.
 

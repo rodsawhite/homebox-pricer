@@ -62,12 +62,18 @@ cp .env.example .env
 # edit .env — set HOMEBOX_TOKEN and HBC_LLM_API_KEY (Anthropic) at minimum
 
 docker compose up -d
-
-# Pull the local text model once (first run only).
-# Capture/vision runs on Claude Haiku 4.5 (cloud), so Ollama only needs a
-# lean text model to parse price snippets — fits easily in 8 GB VRAM.
-docker exec ollama ollama pull qwen2.5:3b
 ```
+
+That's it — no manual model download. On first start the `ollama-init` service
+automatically pulls the local price-parsing model (`PRICE_TEXT_MODEL`, default
+`qwen2.5:3b`) into a persistent volume, and `price-lookup` waits until that pull
+finishes before it starts. The model is cached, so subsequent starts are instant.
+
+> Capture/vision runs on Claude Haiku 4.5 (cloud); Ollama only needs this lean
+> text model to parse price snippets, so it fits easily in 8 GB VRAM. To use a
+> different model, set `PRICE_TEXT_MODEL` in `.env` before `docker compose up`.
+
+Watch the model pull on first run with `docker compose logs -f ollama-init`.
 
 Then open:
 

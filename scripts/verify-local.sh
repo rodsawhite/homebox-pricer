@@ -30,8 +30,22 @@ if [[ "$BUILD" == "1" ]]; then
   docker compose build price-lookup
 fi
 
-step "Bringing up price-lookup (+ its deps)"
+step "Bringing up price-lookup (+ its deps: ollama, ollama-init)"
+# This blocks on ollama-init pulling the model; the first run may take a while
+# while the model downloads.
 docker compose up -d price-lookup
+
+step "Confirming the price model is present in Ollama"
+MODEL="$(grep -E '^PRICE_TEXT_MODEL=' .env 2>/dev/null | cut -d= -f2)"
+MODEL="${MODEL:-qwen2.5:3b}"
+if docker compose exec -T ollama ollama list | grep -q "${MODEL%%:*}"; then
+  echo "model present: ${MODEL}"
+  docker compose exec -T ollama ollama list
+else
+  echo "model ${MODEL} NOT found in Ollama — ollama-init logs:"
+  docker compose logs --tail=50 ollama-init
+  exit 1
+fi
 
 step "Probing /health (up to ~30s)"
 ok=0

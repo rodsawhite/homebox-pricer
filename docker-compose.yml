@@ -1,8 +1,14 @@
 # Homebox Pricer stack.
 #
-# Three services: the upstream Homebox Companion (capture UI), a local Ollama
+# Services: the upstream Homebox Companion (capture UI), a local Ollama
 # (price-text parsing only — capture vision runs on Claude Haiku 4.5 in the
-# cloud), and the price-lookup sidecar built from ./price-lookup.
+# cloud), a one-shot ollama-init that pulls the price model, and the
+# price-lookup sidecar built from ./price-lookup.
+#
+# Model provisioning is automatic: `ollama-init` pulls PRICE_TEXT_MODEL into
+# the shared `ollama` volume on first `docker compose up`, and price-lookup
+# only starts once that pull has completed successfully — no manual
+# `ollama pull` step required.
 #
 # Homebox itself is NOT managed here — it runs separately on the NAS.
 # Copy .env.example to .env and fill it in before `docker compose up`.
@@ -15,11 +21,12 @@ services:
     volumes:
       - ollama:/root/.ollama
     healthcheck:
-      # Ollama serves its version endpoint once ready.
-      test: ["CMD-SHELL", "ollama --version >/dev/null 2>&1 || exit 1"]
-      interval: 30s
+      # `ollama list` talks to the daemon's API, so this is true readiness
+      # (the server is up and answering), not just "the binary exists".
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
       start_period: 20s
     deploy:
       resources:
@@ -28,6 +35,25 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+
+  # One-shot: pull the local price-parsing model, then exit 0. Idempotent —
+  # if the model is already in the volume, `ollama pull` is a fast no-op.
+  ollama-init:
+    image: ollama/ollama:latest
+    container_name: ollama-init
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      PRICE_TEXT_MODEL: ${PRICE_TEXT_MODEL:-qwen2.5:3b}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Pulling price model: $${PRICE_TEXT_MODEL}";
+        ollama pull "$${PRICE_TEXT_MODEL}";
+        echo "Model ready: $${PRICE_TEXT_MODEL}";
+    restart: "no"
 
   homebox-companion:
     image: ghcr.io/duelion/homebox-companion:latest
@@ -69,6 +95,10 @@ services:
     depends_on:
       ollama:
         condition: service_healthy
+      # Wait until the price model has actually been pulled, so the first
+      # sweep can't fail on a missing model.
+      ollama-init:
+        condition: service_completed_successfully
 
 volumes:
   ollama:
