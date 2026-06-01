@@ -196,6 +196,36 @@ the volume, so restarts are instant. Changing the model is an `.env` edit plus a
 
 ---
 
+## Networking (read before changing URLs or ports)
+
+> ⚠️ **The #1 setup gotcha.** Inside a container, `localhost` / `127.0.0.1` means
+> *that container itself* — not the Windows host and not a sibling container. Using
+> them as a connect target to reach another service will fail. Likewise, published
+> host ports (`ports:` in compose) are **only** for reaching a container from
+> outside Docker (your browser, the iPhone, the LAN); they are **not** how
+> containers talk to each other.
+
+Three distinct cases, each with a different rule:
+
+| Direction | Use | Example | Why |
+| --- | --- | --- | --- |
+| **Bind / listen** (a server choosing what to listen on) | `0.0.0.0` | `HBC_SERVER_HOST=0.0.0.0`, uvicorn `--host 0.0.0.0` | Listen on all interfaces so Docker port-forwarding and sibling containers can reach it. Binding to `127.0.0.1` would make it reachable only from inside its own container. `0.0.0.0` is a listen wildcard, never a connect target. |
+| **Container → container** (within this stack) | `http://<service-name>:<container-port>` | `OLLAMA_URL=http://ollama:11434` | Compose gives every service a DNS name equal to its service name. Use the service's **internal** port, *not* the published host mapping — e.g. price-lookup is published as `8091:8091` but a sibling would still reach it at `http://price-lookup:8091`. |
+| **Container → off-stack box** (Homebox on the NAS) | real IP / hostname | `HOMEBOX_URL=http://172.16.0.125:3900` | Homebox is **not** in this compose file, so Docker DNS can't resolve it. A routable IP is required. |
+| **Container → service on the Windows host itself** (not in Docker) | `host.docker.internal` | *(none today)* | The special Docker DNS name for "the host machine". Not used in the current stack, but this — **not** `localhost` — is the name to use if it ever comes up. |
+
+Concrete map of who-talks-to-whom in this stack:
+
+- `price-lookup` → `ollama`: `http://ollama:11434` (service name) ✅
+- `ollama-init` → `ollama`: `http://ollama:11434` (service name) ✅
+- `price-lookup` / `homebox-companion` → Homebox: `http://172.16.0.125:3900` (NAS IP) ✅
+- You (browser/iPhone) → Companion: `http://<host>:8090` (published host port)
+- You (browser/iPhone) → review queue: `http://<host>:8091` (published host port)
+
+Rule of thumb: **bind with `0.0.0.0`, connect with the service name, and only use an IP for the off-stack NAS.**
+
+---
+
 ## Homebox API quirks (designed around)
 
 - **Auth**: bearer token from `POST /api/v1/users/login` (form-encoded `username`/`password`), returned in the `token` field. No long-lived API keys yet; tokens expire after ~1 month. The sidecar supports either a static `HOMEBOX_TOKEN` or credentials for auto-refresh.
