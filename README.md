@@ -77,8 +77,8 @@ Watch the model pull on first run with `docker compose logs -f ollama-init`.
 
 Then open:
 
-- **Capture UI** (Homebox Companion): `http://<host>:8000`
-- **Price review queue** (sidecar): `http://<host>:8090`
+- **Capture UI** (Homebox Companion): `http://<host>:8090`
+- **Price review queue** (sidecar): `http://<host>:8091`
 - **Inventory** (Homebox, on NAS): `http://172.16.0.125:3900`
 
 ---
@@ -92,7 +92,7 @@ All config is via environment variables in `.env`. See [`.env.example`](.env.exa
 | `HOMEBOX_URL` | yes | Homebox base URL, e.g. `http://172.16.0.125:3900` |
 | `HOMEBOX_TOKEN` | yes | Bearer token from Homebox (see note below) |
 | `HBC_LLM_API_KEY` | yes | Anthropic API key used by Companion for Claude Haiku 4.5 |
-| `HBC_LLM_MODEL` | no | Capture model (default `anthropic/claude-haiku-4-5`) |
+| `HBC_LLM_MODEL` | no | Capture model (default `anthropic/claude-haiku-4-5-20251001`) |
 | `PRICE_TEXT_MODEL` | no | Local Ollama model for price parsing (default `qwen2.5:3b`) |
 | `PRICE_REGION` | no | Search region (default `au-en`) |
 | `PRICE_CURRENCY` | no | Currency code (default `AUD`) |

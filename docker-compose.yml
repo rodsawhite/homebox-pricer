@@ -60,23 +60,23 @@ services:
     container_name: homebox-companion
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "8090:8090"
     environment:
       # Capture/image recognition uses Anthropic Claude Haiku 4.5 (cloud).
+      # No HBC_LLM_API_BASE needed — Companion resolves Anthropic natively.
       HBC_LLM_API_KEY: ${HBC_LLM_API_KEY}
-      HBC_LLM_API_BASE: ${HBC_LLM_API_BASE:-}
-      HBC_LLM_MODEL: ${HBC_LLM_MODEL:-anthropic/claude-haiku-4-5}
+      HBC_LLM_MODEL: ${HBC_LLM_MODEL:-anthropic/claude-haiku-4-5-20251001}
       HBC_HOMEBOX_URL: ${HBC_HOMEBOX_URL:-${HOMEBOX_URL}}
-    depends_on:
-      ollama:
-        condition: service_healthy
+      HBC_SERVER_HOST: "0.0.0.0"
+      HBC_SERVER_PORT: "8090"
+    # Companion uses the Anthropic API (cloud) — no Ollama dependency.
 
   price-lookup:
     build: ./price-lookup
     container_name: price-lookup
     restart: unless-stopped
     ports:
-      - "8090:8090"
+      - "8091:8091"
     environment:
       HOMEBOX_URL: ${HOMEBOX_URL}
       HOMEBOX_TOKEN: ${HOMEBOX_TOKEN:-}
@@ -88,7 +88,7 @@ services:
       PRICE_CURRENCY: ${PRICE_CURRENCY:-AUD}
       PRICE_MIN_CONFIDENCE: ${PRICE_MIN_CONFIDENCE:-low}
       CHECK_INTERVAL: ${CHECK_INTERVAL:-3600}
-      SERVER_PORT: ${SERVER_PORT:-8090}
+      SERVER_PORT: ${SERVER_PORT:-8091}
       DB_PATH: ${DB_PATH:-/data/price.db}
     volumes:
       - price-data:/data

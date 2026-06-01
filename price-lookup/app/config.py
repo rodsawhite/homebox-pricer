@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     check_interval: int = 3600
 
     # --- Server ---
-    server_port: int = 8090
+    server_port: int = 8091
     db_path: str = "/data/price.db"
 
 

@@ -17,7 +17,7 @@ Three containers plus an external Homebox instance and a cloud vision API. Only 
                          │                                          │
    iPhone browser        │   ┌──────────────────┐                   │
        │                 │   │ homebox-companion│                   │
-       ├── :8000 ────────┼──▶│  capture + AI    │──┐                │
+       ├── :8090 ────────┼──▶│  capture + AI    │──┐                │
        │  (capture)      │   └──────────────────┘  │ creates items  │
        │                 │                          │                │
        │                 │   ┌──────────────────┐  │                │
@@ -28,7 +28,7 @@ Three containers plus an external Homebox instance and a cloud vision API. Only 
        │                 │            ▲            │                │
        │                 │            │ price parse│                │
        │                 │   ┌──────────────────┐  │                │
-       ├── :8090 ────────┼──▶│  price-lookup    │  │                │
+       ├── :8091 ────────┼──▶│  price-lookup    │  │                │
           (review queue) │   │  scan/search/    │  │                │
                          │   │  queue/review    │  │                │
                          │   └──────────────────┘  │                │
@@ -54,7 +54,7 @@ Three containers plus an external Homebox instance and a cloud vision API. Only 
 3. User reviews/edits the AI's suggestions.
 4. Companion creates items in Homebox via the API, attaching photos.
 
-The capture path needs no code from us — it works out of the box once Companion is pointed at the Anthropic API (key + `anthropic/claude-haiku-4-5`) and Homebox.
+The capture path needs no code from us — it works out of the box once Companion is pointed at the Anthropic API (key + `anthropic/claude-haiku-4-5-20251001`) and Homebox.
 
 ### Pricing path (the sidecar — what we build)
 
@@ -85,7 +85,7 @@ The capture path needs no code from us — it works out of the box once Companio
 6. Store candidate in local SQLite queue (status = 'pending')
             │
             ▼
-7. Human opens :8090 review queue → Approve / Reject / Edit
+7. Human opens :8091 review queue → Approve / Reject / Edit
             │
    approve  ▼
 8. Read item from Homebox → merge price → PUT full object back
@@ -162,7 +162,7 @@ price-lookup/
 
 | Job | Model | Why |
 | --- | --- | --- |
-| Image → item identity (capture) | `claude-haiku-4-5` (Anthropic, cloud) | Strong, fast vision at low cost. Removes the local VRAM/throughput constraint on capture and gives noticeably better item identification than a small local vision model. Configured in Companion as `anthropic/claude-haiku-4-5`. |
+| Image → item identity (capture) | `claude-haiku-4-5-20251001` (Anthropic, cloud) | Strong, fast vision at low cost. Removes the local VRAM/throughput constraint on capture and gives noticeably better item identification than a small local vision model. Configured in Companion as `anthropic/claude-haiku-4-5-20251001`. |
 | Search snippets → price (pricing) | `qwen2.5:3b` (Ollama, local) | Interpreting messy search snippets is a text task; a small local text model handles it well, keeps the price sweeps free of API cost, and stays resident in a couple of GB of VRAM. Far more reliable than regex alone, which cannot distinguish a product price from shipping, an old sale price, or an unrelated number. |
 
 **Why split capture and pricing across two models.** Capture quality benefits most from a
@@ -189,10 +189,10 @@ sweep against a missing model) until the pull finishes. The pull is idempotent a
 the volume, so restarts are instant. Changing the model is an `.env` edit plus a restart of
 `ollama-init` — no rebuild.
 
-> **Assumption to verify (Phase 1).** Companion is configured here via a LiteLLM-style model
-> string (`anthropic/claude-haiku-4-5`) with the Anthropic key in `HBC_LLM_API_KEY`. Confirm
-> the running Companion build accepts Anthropic providers and the exact model alias before
-> relying on it; adjust the env var names/format to match Companion's actual LLM config if needed.
+> **Verified.** Companion accepts Anthropic natively via `HBC_LLM_API_KEY` (no
+> `HBC_LLM_API_BASE` needed) and `HBC_LLM_MODEL=anthropic/claude-haiku-4-5-20251001`.
+> Use the full versioned model ID. Companion's default port is 8090 (set via
+> `HBC_SERVER_PORT`); the price-lookup sidecar therefore runs on 8091.
 
 ---
 

@@ -14,7 +14,7 @@ Every `CHECK_INTERVAL` seconds (default hourly) the sidecar:
 2. Builds a search query from the item's name, manufacturer, and model number.
 3. Searches DuckDuckGo (region `au-en`) and feeds the result snippets to a lean local text model (`qwen2.5:3b` via Ollama) that extracts a price as structured JSON. (Capture/vision runs separately on Claude Haiku 4.5 in the cloud; this sidecar only does text.)
 4. Stores each result as a **pending candidate** in its own SQLite DB.
-5. Waits for you to Approve / Reject / Edit in the review queue at `:8090`.
+5. Waits for you to Approve / Reject / Edit in the review queue at `:8091`.
 6. On approval, reads the full item from Homebox, sets the price, and writes it back with **PUT** (the full object — PATCH is unreliable on Homebox items).
 
 It does **not** touch the capture flow — that's Homebox Companion's job.
@@ -37,7 +37,7 @@ Read from environment variables (see the root [`.env.example`](../.env.example))
 | `PRICE_CURRENCY` | `AUD` | Expected currency |
 | `PRICE_MIN_CONFIDENCE` | `low` | Hide candidates below this in the queue (`low`/`medium`/`high`) |
 | `CHECK_INTERVAL` | `3600` | Seconds between sweeps |
-| `SERVER_PORT` | `8090` | Port for the review queue + API |
+| `SERVER_PORT` | `8091` | Port for the review queue + API |
 | `DB_PATH` | `/data/price.db` | SQLite file location |
 
 > Provide **either** `HOMEBOX_TOKEN` (simple, expires ~monthly) **or** `HOMEBOX_USER` + `HOMEBOX_PASSWORD` (auto-refresh). If both are set, credentials win and the token is treated as a warm start.
@@ -51,7 +51,7 @@ As part of the stack (recommended): see the root README. Standalone, for develop
 ```bash
 cd price-lookup
 uv sync
-uv run uvicorn app.main:app --host 0.0.0.0 --port 8090
+uv run uvicorn app.main:app --host 0.0.0.0 --port 8091
 ```
 
 Persist the SQLite DB by mounting a volume at `/data`.
@@ -75,7 +75,7 @@ Persist the SQLite DB by mounting a volume at `/data`.
 ### Example: ad-hoc lookup
 
 ```bash
-curl -X POST http://localhost:8090/api/lookup \
+curl -X POST http://localhost:8091/api/lookup \
   -H "Content-Type: application/json" \
   -d '{"query": "Sony WH-1000XM5"}'
 ```

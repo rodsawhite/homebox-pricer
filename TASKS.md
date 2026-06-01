@@ -64,11 +64,11 @@ NVIDIA driver present (RTX 3070).
 ### iPhone reachability (LAN)
 
 - [ ] 🔴 Add **one inbound Windows Firewall rule** allowing TCP on ports **8000**
-      (Companion) and **8090** (review queue). Docker Desktop forwards published ports to
+      (Companion) and **8091** (review queue). Docker Desktop forwards published ports to
       the host, but Windows Firewall blocks inbound LAN connections by default.
 - [ ] 🔴 Find the Windows LAN IP (`ipconfig` → IPv4) and reserve a static DHCP lease for it
       on the router so it doesn't change
-- [ ] 🟢 / 🔴 Smoke test from the iPhone once Phase 1 is up: `http://<windows-LAN-IP>:8000`
+- [ ] 🟢 / 🔴 Smoke test from the iPhone once Phase 1 is up: `http://<windows-LAN-IP>:8090`
       *(Claude Code can confirm the port is listening on the host; the actual phone test is
       yours.)*
 
@@ -97,7 +97,7 @@ iPhone.
 - [x] Add a healthcheck to `ollama` (true daemon readiness via `ollama list`); make `homebox-companion` and `price-lookup` depend on it
 - [x] Auto-provision the model: `ollama-init` one-shot pulls `PRICE_TEXT_MODEL` into the shared volume; `price-lookup` waits on `service_completed_successfully` (no manual pull)
 - [x] Create `.env.example` and document every variable (incl. `HBC_LLM_API_KEY` Anthropic key)
-- [x] Configure Companion for Claude Haiku 4.5: `HBC_LLM_MODEL=anthropic/claude-haiku-4-5`,
+- [x] Configure Companion for Claude Haiku 4.5: `HBC_LLM_MODEL=anthropic/claude-haiku-4-5-20251001`,
       Anthropic key in `HBC_LLM_API_KEY`, `HBC_LLM_API_BASE` left blank
 - [ ] **Verify the Companion↔Anthropic assumption**: confirm the Companion build accepts an
       Anthropic provider and this model alias (check its LLM config docs); adjust env names/format if needed
