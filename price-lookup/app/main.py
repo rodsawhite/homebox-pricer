@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from html import escape
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -70,13 +71,15 @@ def status() -> dict[str, object]:
 @app.get("/", response_class=HTMLResponse)
 def queue_page() -> str:
     candidates = list_candidates(status="pending")
+    # Item names / source URLs originate from Homebox (ultimately from photo
+    # capture + AI), so they are untrusted — escape before rendering to HTML.
     rows = "".join(
         f"""<tr>
           <td>{c['id']}</td>
-          <td>{c['item_name']}</td>
-          <td>{c['price'] if c['price'] is not None else '—'} {c['currency']}</td>
-          <td>{c['confidence']}</td>
-          <td>{c['source_url'] or '—'}</td>
+          <td>{escape(str(c['item_name']))}</td>
+          <td>{c['price'] if c['price'] is not None else '—'} {escape(str(c['currency']))}</td>
+          <td>{escape(str(c['confidence']))}</td>
+          <td>{escape(c['source_url']) if c['source_url'] else '—'}</td>
           <td>
             <form method="post" action="/api/candidates/{c['id']}/approve" style="display:inline">
               <button>Approve</button>

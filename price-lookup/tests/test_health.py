@@ -70,6 +70,26 @@ def test_candidates_empty(client):
     assert resp.json() == []
 
 
+def test_queue_page_escapes_untrusted_names(client):
+    """An item name with HTML must be escaped, not rendered as markup."""
+    from app import db
+
+    db.upsert_candidate(
+        homebox_id="evil-1",
+        item_name="<script>alert(1)</script>",
+        query="x",
+        price=10.0,
+        currency="AUD",
+        source_url="http://x/?a=1&b=2",
+        confidence="low",
+        reason="test",
+    )
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "<script>alert(1)</script>" not in resp.text
+    assert "&lt;script&gt;" in resp.text
+
+
 def test_approve_missing(client):
     resp = client.post("/api/candidates/9999/approve")
     assert resp.status_code == 404
