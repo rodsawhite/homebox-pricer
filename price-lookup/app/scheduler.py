@@ -16,8 +16,9 @@ import logging
 from datetime import datetime, timezone
 
 from .config import get_settings
-from .db import init_db, pending_homebox_ids, upsert_candidate
+from .db import init_db, pending_homebox_ids, update_candidate_price, upsert_candidate
 from .homebox import HomeboxClient, HomeboxError
+from .pricing import lookup_price
 
 logger = logging.getLogger(__name__)
 
@@ -65,18 +66,23 @@ async def run_sweep() -> dict[str, int]:
         parts = [p for p in [manufacturer, name, model] if p]
         query = " ".join(parts) + f" price {settings.price_currency}"
 
-        upsert_candidate(
+        result = lookup_price(query)
+
+        candidate_id = upsert_candidate(
             homebox_id=item_id,
             item_name=name,
             query=query,
-            price=None,
-            currency=settings.price_currency,
-            source_url=None,
-            confidence="low",
-            reason="queued — pricing pending Phase 3",
+            price=result["price"],
+            currency=result.get("currency", settings.price_currency),
+            source_url=result["source_url"],
+            confidence=result["confidence"],
+            reason=result["reason"],
         )
         counts["queued"] += 1
-        logger.debug("Queued item %s (%s)", item_id, name)
+        logger.info(
+            "Queued item %s (%s): price=%s confidence=%s",
+            item_id, name, result["price"], result["confidence"],
+        )
 
     _last_sweep = datetime.now(timezone.utc)
     logger.info(

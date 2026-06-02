@@ -110,13 +110,13 @@ iPhone.
 
 ## Phase 2 — Homebox client + scan
 
-- [ ] `config.py` — load settings from env via pydantic-settings
-- [ ] `homebox.py` — login / token-refresh, `list_items` (paginated), `get_item`, `put_item`
-- [ ] `db.py` — create SQLite schema, insert/query/update candidates
-- [ ] `scheduler.py` — background loop every `CHECK_INTERVAL`
-- [ ] Scan logic: fetch all items, filter to unpriced, skip ones with an open candidate
-- [ ] `/status` and `/api/sweep` endpoints
-- [ ] Log how many items are unpriced on each sweep
+- [x] `config.py` — load settings from env via pydantic-settings
+- [x] `homebox.py` — login / token-refresh, `list_items` (paginated), `get_item`, `put_item`
+- [x] `db.py` — create SQLite schema, insert/query/update candidates
+- [x] `scheduler.py` — background loop every `CHECK_INTERVAL`
+- [x] Scan logic: fetch all items, filter to unpriced, skip ones with an open candidate
+- [x] `/status` and `/api/sweep` endpoints
+- [x] Log how many items are unpriced on each sweep
 
 **Done when:** a manual `POST /api/sweep` populates the candidates table with the right items (price still null).
 
@@ -124,14 +124,14 @@ iPhone.
 
 ## Phase 3 — Pricing pipeline
 
-- [ ] Add `duckduckgo_search` (DDGS) to dependencies
-- [ ] `pricing.py` — build query from name + manufacturer + model, search region `au-en`
-- [ ] Pass titles + snippets to Ollama `qwen2.5:3b` (local text model) with a strict JSON-output prompt
-- [ ] Parse model output → `{price, currency, source, confidence, reason}`
-- [ ] AUD disambiguation: prefer `.com.au` / explicit `AUD`; mark `$`-only results low-confidence
-- [ ] Store results back on the candidate rows
-- [ ] `/api/lookup` ad-hoc endpoint for one-off queries (no Homebox write)
-- [ ] Add basic rate limiting / politeness delay between searches
+- [x] Add `duckduckgo_search` (DDGS) to dependencies
+- [x] `pricing.py` — build query from name + manufacturer + model, search region `au-en`
+- [x] Pass titles + snippets to Ollama `qwen2.5:3b` (local text model) with a strict JSON-output prompt
+- [x] Parse model output → `{price, currency, source, confidence, reason}`
+- [x] AUD disambiguation: prefer `.com.au` / explicit `AUD`; mark `$`-only results low-confidence
+- [x] Store results back on the candidate rows
+- [x] `/api/lookup` ad-hoc endpoint for one-off queries (no Homebox write)
+- [x] Add basic rate limiting / politeness delay between searches
 
 **Done when:** a sweep fills candidates with plausible AUD prices and confidence levels.
 

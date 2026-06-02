@@ -23,6 +23,7 @@ from .db import (
     update_candidate_price,
 )
 from .homebox import HomeboxClient, HomeboxError
+from .pricing import lookup_price
 from .scheduler import last_sweep, run_sweep, scheduler_loop
 
 logging.basicConfig(level=logging.INFO)
@@ -154,6 +155,24 @@ def api_edit(candidate_id: int, body: CandidateEdit) -> dict[str, str]:
         raise HTTPException(400, f"Candidate is already {row['status']}")
     update_candidate_price(candidate_id, body.price, body.source_url)
     return {"result": "updated"}
+
+
+# ---------------------------------------------------------------------------
+# Ad-hoc lookup
+# ---------------------------------------------------------------------------
+
+
+class LookupRequest(BaseModel):
+    query: str
+
+
+@app.post("/api/lookup")
+def api_lookup(body: LookupRequest) -> dict[str, Any]:
+    """One-off price lookup. Searches DDG + Ollama; does not write to the DB."""
+    if not body.query.strip():
+        raise HTTPException(400, "query must not be empty")
+    result = lookup_price(body.query.strip())
+    return {"query": body.query.strip(), **result}
 
 
 # ---------------------------------------------------------------------------
