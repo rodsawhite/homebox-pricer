@@ -139,12 +139,12 @@ iPhone.
 
 ## Phase 4 — Review queue UI
 
-- [ ] `templates/queue.html` — server-rendered list: thumbnail, name, candidate price, source link, confidence badge
-- [ ] Approve / Reject / Edit actions wired to the API
-- [ ] Approve flow: GET item → set `purchasePrice` → PUT back → mark `applied`
-- [ ] Edit flow: let the human override price/source before approving
-- [ ] Empty state + last-sweep summary on the page
-- [ ] Pull the item thumbnail from Homebox for visual confirmation
+- [x] `templates/queue.html` — server-rendered list: thumbnail, name, candidate price, source link, confidence badge
+- [x] Approve / Reject / Edit actions wired to the API
+- [x] Approve flow: GET item → set `purchasePrice` → PUT back → mark `applied`
+- [x] Edit flow: let the human override price/source before approving
+- [x] Empty state + last-sweep summary on the page
+- [x] Pull the item thumbnail from Homebox for visual confirmation
 
 **Done when:** approving a candidate writes the price into Homebox and it shows in the Homebox UI.
 

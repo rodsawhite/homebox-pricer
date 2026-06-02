@@ -1,14 +1,13 @@
 """Smoke + endpoint tests for the price-lookup service.
 
 These run anywhere — no Docker daemon, no Homebox, no Ollama, no secrets.
-The scheduler loop is mocked so no background tasks actually run.
+The scheduler loop and Homebox thumbnail fetch are mocked.
 """
 
 from __future__ import annotations
 
-import os
 import importlib
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,18 +15,18 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture(autouse=True)
 def _isolated_db(tmp_path, monkeypatch):
-    """Point the DB at a temp file and stub out the scheduler loop."""
     monkeypatch.setenv("DB_PATH", str(tmp_path / "test.db"))
     monkeypatch.setenv("HOMEBOX_URL", "http://homebox.test")
     monkeypatch.setenv("HOMEBOX_TOKEN", "test-token")
-    # Clear the settings cache so each test gets fresh env
-    import app.config as cfg_mod
-    cfg_mod.get_settings.cache_clear() if hasattr(cfg_mod.get_settings, "cache_clear") else None
 
 
 @pytest.fixture()
 def client(_isolated_db):
-    with patch("app.scheduler.scheduler_loop", new_callable=AsyncMock):
+    with (
+        patch("app.scheduler.scheduler_loop", new_callable=AsyncMock),
+        # Thumbnail fetch hits Homebox — stub it out so tests need no network.
+        patch("app.main._thumbnail_url", return_value=None),
+    ):
         import app.main as main_mod
         importlib.reload(main_mod)
         with TestClient(main_mod.app) as c:
@@ -58,22 +57,34 @@ def test_status_shape(client):
     assert "price_text_model" in body
 
 
-def test_queue_page(client):
+def test_queue_page_empty_state(client):
     resp = client.get("/")
     assert resp.status_code == 200
     assert "Price Review Queue" in resp.text
+    assert "No pending candidates" in resp.text
 
 
-def test_candidates_empty(client):
-    resp = client.get("/api/candidates")
+def test_queue_page_shows_candidate(client):
+    from app import db
+    db.upsert_candidate(
+        homebox_id="hb-1",
+        item_name="Sony WH-1000XM5",
+        query="Sony WH-1000XM5 price AUD",
+        price=549.0,
+        currency="AUD",
+        source_url="https://www.jbhifi.com.au/products/sony-wh",
+        confidence="high",
+        reason="Listed at JB Hi-Fi",
+    )
+    resp = client.get("/")
     assert resp.status_code == 200
-    assert resp.json() == []
+    assert "Sony WH-1000XM5" in resp.text
+    assert "549" in resp.text
+    assert "high" in resp.text
 
 
 def test_queue_page_escapes_untrusted_names(client):
-    """An item name with HTML must be escaped, not rendered as markup."""
     from app import db
-
     db.upsert_candidate(
         homebox_id="evil-1",
         item_name="<script>alert(1)</script>",
@@ -90,6 +101,25 @@ def test_queue_page_escapes_untrusted_names(client):
     assert "&lt;script&gt;" in resp.text
 
 
+def test_candidates_empty(client):
+    resp = client.get("/api/candidates")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+def test_candidates_list(client):
+    from app import db
+    db.upsert_candidate(
+        homebox_id="hb-2", item_name="Test Item", query="test",
+        price=99.0, currency="AUD", source_url=None, confidence="low", reason="r",
+    )
+    resp = client.get("/api/candidates?status=pending")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["item_name"] == "Test Item"
+
+
 def test_approve_missing(client):
     resp = client.post("/api/candidates/9999/approve")
     assert resp.status_code == 404
@@ -98,3 +128,53 @@ def test_approve_missing(client):
 def test_reject_missing(client):
     resp = client.post("/api/candidates/9999/reject")
     assert resp.status_code == 404
+
+
+def test_reject_sets_status(client):
+    from app import db
+    db.upsert_candidate(
+        homebox_id="hb-3", item_name="Reject Me", query="x",
+        price=50.0, currency="AUD", source_url=None, confidence="low", reason="r",
+    )
+    rows = db.list_candidates(status="pending")
+    cid = rows[0]["id"]
+    resp = client.post(f"/api/candidates/{cid}/reject")
+    assert resp.status_code == 200
+    assert resp.json()["result"] == "rejected"
+    updated = db.get_candidate(cid)
+    assert updated["status"] == "rejected"
+
+
+def test_edit_candidate(client):
+    from app import db
+    db.upsert_candidate(
+        homebox_id="hb-4", item_name="Edit Me", query="x",
+        price=None, currency="AUD", source_url=None, confidence="low", reason="r",
+    )
+    rows = db.list_candidates(status="pending")
+    cid = rows[0]["id"]
+    resp = client.post(
+        f"/api/candidates/{cid}",
+        json={"price": 299.99, "source_url": "https://example.com.au/"},
+    )
+    assert resp.status_code == 200
+    updated = db.get_candidate(cid)
+    assert updated["price"] == 299.99
+    assert updated["source_url"] == "https://example.com.au/"
+
+
+def test_approve_no_price_rejected(client):
+    from app import db
+    db.upsert_candidate(
+        homebox_id="hb-5", item_name="No Price", query="x",
+        price=None, currency="AUD", source_url=None, confidence="low", reason="r",
+    )
+    rows = db.list_candidates(status="pending")
+    cid = rows[0]["id"]
+    resp = client.post(f"/api/candidates/{cid}/approve")
+    assert resp.status_code == 400
+
+
+def test_lookup_empty_query(client):
+    resp = client.post("/api/lookup", json={"query": "  "})
+    assert resp.status_code == 400
