@@ -16,6 +16,7 @@ must be null (an empty string triggers a generic 500).
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from typing import Any, Callable
@@ -194,6 +195,7 @@ class HomeboxClient:
         """Write the full item object back (read-modify-write pattern)."""
         url = f"{self._base}/api/v1/items/{item_id}"
         what = f"put_item {item_id}"
+        logger.debug("PUT %s body=%s", item_id, json.dumps(item))
         for attempt in range(2):
             resp = _retry_request(
                 lambda: httpx.put(url, headers=self._auth_header(), json=item, timeout=10),
@@ -204,6 +206,11 @@ class HomeboxClient:
                     continue
                 raise HomeboxAuthError(f"{what}: 401 (token expired, no credentials to refresh)")
             if resp.status_code not in (200, 204):
+                # Log both sides so we can see exactly which field Homebox rejects.
+                logger.error(
+                    "PUT %s failed: %s %s — sent body: %s",
+                    item_id, resp.status_code, resp.text[:500], json.dumps(item),
+                )
                 raise HomeboxError(f"{what}: {resp.status_code} {resp.text[:200]}")
             return
 
