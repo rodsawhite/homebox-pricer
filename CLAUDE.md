@@ -108,28 +108,35 @@ Most bugs here have been Homebox payload/schema mismatches. Use these in order:
 - **PUT uses the `ItemUpdate` schema, not the GET `ItemOut` response.** Feeding
   the GET response back to PUT causes `500 {"error":"Unknown Error"}`.
   `_build_put_payload()` projects it: nested edges → flat IDs (`location`→
-  `locationId`, `labels`→`labelIds`, `parent`→`parentId`), drops read-only
-  fields (`attachments`, timestamps), and sends **`null` not `""`** for empty
-  UUID/date fields (an empty string fails the parse → same generic 500).
-  `parentId`/`purchasePrice`/`soldPrice` are `x-nullable`; `locationId` is required.
+  `locationId`, `tags`/`labels`→`tagIds`+`labelIds`, `parent`→`parentId`), drops
+  read-only fields (`attachments`, timestamps), and sends **`null`** for empty
+  date fields (`types.Date.UnmarshalJSON` treats `null`/`""` as the zero date).
+- **Prices are plain numbers in v0.25.0.** `ItemUpdate.PurchasePrice`/`SoldPrice`
+  are bare `float64` (no `json:",string"` tag). Send `467.96`, **not** `"467.96"`
+  — a string fails the decoder → 500. (Note: hay-kot's `main` branch *does* use
+  `,string`; the sysadminsmedia fork dropped it. Always check the **tag for the
+  user's exact version**, not `main`.)
+- **labels → tags rename (v0.23+).** Homebox renamed `labels`→`tags` and the PUT
+  key `labelIds`→`tagIds`. `_build_put_payload()` reads whichever the GET returns
+  and sends **both** `tagIds` and `labelIds` (each version ignores the other) so
+  tags survive the read-modify-write instead of being silently wiped.
 - **PUT not PATCH** — PATCH has silently dropped custom fields on some versions.
 - A generic **`500 {"error":"Unknown Error"}`** is Homebox's *sanitized* client
   response; the real Go error is in the **Homebox container logs**
   (`docker logs <homebox>`). Validation errors come back as **422**, so a 500
   means a parse/DB error — usually a malformed field value.
 
-### Debugging a PUT 500 (current open issue)
+### Debugging a PUT 500
 
-Approving a candidate still 500s. `put_item` logs the exact outgoing JSON body
-and Homebox's response at ERROR level on any non-2xx. To diagnose:
-1. Reproduce the approve, then find the `ERROR ... PUT ... failed: 500 ... —
-   sent body: {...}` line in `docker compose logs price-lookup`.
-2. Diff that `sent body` field-by-field against `ItemUpdate` in the swagger spec.
-3. Cross-check the same operation in Companion's `update_item`.
-4. Check the Homebox container logs for the underlying Go error.
-
-Leading suspects: the `fields` (custom fields) array shape, or a date GET
-returns as RFC3339 but PUT expects as `YYYY-MM-DD`.
+`apply_price()` logs the GET response and the built PUT payload at INFO, and
+`put_item()` logs the outgoing body. To diagnose:
+1. Reproduce the approve, find the `apply_price PUT payload` / `PUT ... failed:
+   500 ... sent body: {...}` lines in `docker compose logs price-lookup`.
+2. Diff that body field-by-field against `ItemUpdate` in the source **for the
+   user's Homebox version tag** (e.g. `repo_items.go` at `v0.25.0`), not `main`
+   — the schema drifts between releases (`,string` on prices, `labelIds`↔`tagIds`,
+   `purchaseTime`↔`purchaseDate`, `/items`↔`/entities`).
+3. Check the Homebox container logs for the underlying Go error.
 
 ## Conventions
 

@@ -9,9 +9,10 @@ observed to silently drop custom fields on some Homebox versions.
 
 API reference: https://homebox.software/en/api/
 The PUT /items/{id} body follows the ItemUpdate schema: nested objects
-(location, labels, parent) are sent as flat IDs (locationId/labelIds/parentId),
-'attachments' is read-only and must be omitted, and empty UUID/date fields
-must be null (an empty string triggers a generic 500).
+(location, tags/labels, parent) are sent as flat IDs (locationId, tagIds +
+labelIds, parentId), 'attachments' is read-only and must be omitted, prices
+are plain numbers (v0.25.0 dropped the json:",string" tag), and empty date
+fields are sent as null. See the Homebox gotchas in CLAUDE.md before editing.
 """
 
 from __future__ import annotations
@@ -219,7 +220,7 @@ class HomeboxClient:
         item = self.get_item(item_id)
         logger.info("apply_price GET response for %s: %s", item_id, json.dumps(item))
         payload = _build_put_payload(item)
-        payload["purchasePrice"] = str(price)
+        payload["purchasePrice"] = price
         logger.info("apply_price PUT payload for %s: %s", item_id, json.dumps(payload))
         self.put_item(item_id, payload)
         logger.info("Applied price %.2f to item %s", price, item_id)
@@ -234,9 +235,12 @@ def _build_put_payload(item: dict) -> dict:
     This function projects only the writable scalar fields and maps nested
     objects to their flat ID equivalents that ItemUpdate expects.
     """
-    # location and labels come back as objects; PUT wants their IDs only.
+    # location and tags/labels come back as objects; PUT wants their IDs only.
+    # Homebox v0.23+ renamed "labels" → "tags" (and labelIds → tagIds on PUT);
+    # read whichever the server returned so tags survive a read-modify-write.
     loc = item.get("location") or {}
-    labels = item.get("labels") or []
+    tags = item.get("tags") or item.get("labels") or []
+    tag_ids = [t["id"] for t in tags if t.get("id")]
     parent = item.get("parent") or {}
 
     def _date(value: Any) -> Any:
@@ -258,7 +262,10 @@ def _build_put_payload(item: dict) -> dict:
         # Nested → flat IDs. Empty UUIDs must be null, not "" — an empty
         # string fails Homebox's UUID parse and triggers a generic 500.
         "locationId": loc.get("id") or None,
-        "labelIds": [lbl["id"] for lbl in labels if lbl.get("id")],
+        # Send both keys: newer Homebox reads "tagIds", older reads "labelIds";
+        # each ignores the other, so this is safe across versions.
+        "tagIds": tag_ids,
+        "labelIds": tag_ids,
         "parentId": parent.get("id") or None,
         # Identifications
         "serialNumber": item.get("serialNumber", ""),
@@ -271,13 +278,13 @@ def _build_put_payload(item: dict) -> dict:
         # Purchase
         "purchaseTime": _date(item.get("purchaseTime")),
         "purchaseFrom": item.get("purchaseFrom", ""),
-        # Homebox serialises price fields with json:",string" — the PUT body
-        # must send them as JSON strings ("29.99"), not numbers (29.99).
-        "purchasePrice": str(item.get("purchasePrice") or 0),
+        # v0.25.0 ItemUpdate.PurchasePrice is a plain float64 (no json:",string"
+        # tag) — send a number. Sending a string fails the decoder → 500.
+        "purchasePrice": item.get("purchasePrice") or 0,
         # Sold
         "soldTime": _date(item.get("soldTime")),
         "soldTo": item.get("soldTo", ""),
-        "soldPrice": str(item.get("soldPrice") or 0),
+        "soldPrice": item.get("soldPrice") or 0,
         "soldNotes": item.get("soldNotes", ""),
         # Extras
         "notes": item.get("notes", ""),
