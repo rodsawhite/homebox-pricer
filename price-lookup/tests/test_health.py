@@ -178,3 +178,48 @@ def test_approve_no_price_rejected(client):
 def test_lookup_empty_query(client):
     resp = client.post("/api/lookup", json={"query": "  "})
     assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Confidence pre-filter (queue page + API escape hatch)
+# ---------------------------------------------------------------------------
+
+def _seed_low_and_high(db):
+    db.upsert_candidate(
+        homebox_id="lo", item_name="Cheap Low", query="x", price=5.0,
+        currency="AUD", source_url=None, confidence="low", reason="r",
+    )
+    db.upsert_candidate(
+        homebox_id="hi", item_name="Solid High", query="x", price=50.0,
+        currency="AUD", source_url=None, confidence="high", reason="r",
+    )
+
+
+def test_api_candidates_filters_below_threshold(client, monkeypatch):
+    # Raise the floor to "high" — the low-confidence candidate is hidden.
+    monkeypatch.setenv("PRICE_MIN_CONFIDENCE", "high")
+    from app import db
+    _seed_low_and_high(db)
+
+    resp = client.get("/api/candidates?status=pending")
+    names = {c["item_name"] for c in resp.json()}
+    assert names == {"Solid High"}
+
+    # Escape hatch returns everything.
+    resp_all = client.get("/api/candidates?status=pending&include_all=true")
+    names_all = {c["item_name"] for c in resp_all.json()}
+    assert names_all == {"Solid High", "Cheap Low"}
+
+
+def test_queue_page_hides_low_confidence(client, monkeypatch):
+    monkeypatch.setenv("PRICE_MIN_CONFIDENCE", "high")
+    from app import db
+    _seed_low_and_high(db)
+
+    resp = client.get("/")
+    assert "Solid High" in resp.text
+    assert "Cheap Low" not in resp.text
+    assert "hidden below" in resp.text  # the filter notice
+
+    resp_all = client.get("/?include_all=true")
+    assert "Cheap Low" in resp_all.text

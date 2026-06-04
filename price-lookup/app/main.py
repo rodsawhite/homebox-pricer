@@ -24,10 +24,11 @@ from .db import (
     update_candidate_price,
 )
 from .homebox import HomeboxClient, HomeboxError
+from .logging_config import configure_logging
 from .pricing import lookup_price
 from .scheduler import last_sweep, run_sweep, scheduler_loop
 
-logging.basicConfig(level=logging.INFO)
+configure_logging(get_settings().log_format)
 
 _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
@@ -89,13 +90,25 @@ def _thumbnail_url(homebox_id: str) -> str | None:
 
 
 @app.get("/", response_class=HTMLResponse)
-def queue_page(request: Request, flash: str = "", flash_type: str = "ok") -> Any:
-    candidates_raw = list_candidates(status="pending")
+def queue_page(
+    request: Request,
+    flash: str = "",
+    flash_type: str = "ok",
+    include_all: bool = False,
+) -> Any:
+    # Hide sub-threshold candidates by default; ?include_all=true reveals them.
+    settings = get_settings()
+    min_conf = None if include_all else settings.price_min_confidence
+    candidates_raw = list_candidates(status="pending", min_confidence=min_conf)
     candidates = []
     for row in candidates_raw:
         c = dict(row)
         c["thumbnail_url"] = _thumbnail_url(c["homebox_id"])
         candidates.append(c)
+
+    # How many pending candidates are hidden by the confidence filter?
+    total_pending = len(list_candidates(status="pending"))
+    hidden = total_pending - len(candidates)
 
     sweep = last_sweep()
     return _TEMPLATES.TemplateResponse(
@@ -106,6 +119,9 @@ def queue_page(request: Request, flash: str = "", flash_type: str = "ok") -> Any
             "counts": count_by_status(),
             "last_sweep": sweep.strftime("%Y-%m-%d %H:%M UTC") if sweep else None,
             "flash": {"type": flash_type, "message": flash} if flash else None,
+            "min_confidence": min_conf,
+            "include_all": include_all,
+            "hidden_count": hidden,
         },
     )
 
@@ -138,8 +154,16 @@ def web_edit(
 
 
 @app.get("/api/candidates")
-def api_list_candidates(status: str | None = None) -> list[dict[str, Any]]:
-    return [dict(row) for row in list_candidates(status=status)]
+def api_list_candidates(
+    status: str | None = None, include_all: bool = False
+) -> list[dict[str, Any]]:
+    # Apply the confidence pre-filter by default (matching the queue page);
+    # ?include_all=true returns everything, including sub-threshold candidates.
+    min_conf = None if include_all else get_settings().price_min_confidence
+    return [
+        dict(row)
+        for row in list_candidates(status=status, min_confidence=min_conf)
+    ]
 
 
 @app.post("/api/candidates/{candidate_id}/approve")

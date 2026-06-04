@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Multi-stage build: install deps with uv, then run a slim final image.
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS build
+FROM ghcr.io/astral-sh/uv:0.5.11-python3.12-bookworm-slim AS build
 
 WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
@@ -12,7 +12,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 COPY app ./app
 
-FROM python:3.12-slim-bookworm AS runtime
+FROM python:3.12.8-slim-bookworm AS runtime
 
 WORKDIR /app
 # Bring over installed site-packages + console scripts from the build stage.

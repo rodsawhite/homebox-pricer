@@ -109,6 +109,15 @@
     <span class="badge badge-applied">{{ counts.applied }} applied</span>
     <span class="badge badge-rejected">{{ counts.rejected }} rejected</span>
   </span>
+  {% if hidden_count and not include_all %}
+    <span>
+      {{ hidden_count }} hidden below
+      <strong>{{ min_confidence }}</strong> confidence —
+      <a href="/?include_all=true">show all</a>
+    </span>
+  {% elif include_all %}
+    <span><a href="/">hide low-confidence</a></span>
+  {% endif %}
 </div>
 
 {% if flash %}

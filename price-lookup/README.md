@@ -35,10 +35,11 @@ Read from environment variables (see the root [`.env.example`](../.env.example))
 | `PRICE_TEXT_MODEL` | `qwen2.5:3b` | Local Ollama text model used to extract prices |
 | `PRICE_REGION` | `au-en` | DuckDuckGo region |
 | `PRICE_CURRENCY` | `AUD` | Expected currency |
-| `PRICE_MIN_CONFIDENCE` | `low` | Hide candidates below this in the queue (`low`/`medium`/`high`) |
+| `PRICE_MIN_CONFIDENCE` | `low` | Hide queue candidates below this confidence (`low`/`medium`/`high`); sub-threshold candidates are still stored |
 | `CHECK_INTERVAL` | `3600` | Seconds between sweeps |
 | `SERVER_PORT` | `8091` | Port for the review queue + API |
 | `DB_PATH` | `/data/price.db` | SQLite file location |
+| `LOG_FORMAT` | `plain` | `plain` for human-readable logs, `json` for one JSON object per line |
 
 > Provide **either** `HOMEBOX_TOKEN` (simple, expires ~monthly) **or** `HOMEBOX_USER` + `HOMEBOX_PASSWORD` (auto-refresh). If both are set, credentials win and the token is treated as a warm start.
 
@@ -90,6 +91,59 @@ curl -X POST http://localhost:8091/api/lookup \
   "reason": "Listed price A$549 on an .com.au retailer matching the model."
 }
 ```
+
+---
+
+## Review queue UI
+
+The page at `:8091/` is the human-in-the-loop review queue. Each pending
+candidate is a card showing:
+
+- a Homebox attachment thumbnail (or a 📦 placeholder if none),
+- the item name and the search query that was used,
+- the looked-up price + currency and a colour-coded **confidence** badge
+  (high / medium / low),
+- the model's one-line reason and the source URL,
+- **Approve** / **Reject** buttons, plus an inline **edit** row to correct the
+  price or source before approving.
+
+A top bar shows the last sweep time, pending/applied/rejected counts, and a
+**Sweep now** trigger.
+
+> Screenshots: _to be added._ The UI is a single self-contained Jinja2 template
+> (`app/templates/queue.html`) with no JS build step, so it renders identically
+> anywhere; a captured screenshot can be dropped in here later.
+
+### Confidence filter (and the escape hatch)
+
+By default the queue (and `GET /api/candidates`) hides candidates whose
+confidence is below `PRICE_MIN_CONFIDENCE` (order: `low` < `medium` < `high`).
+Nothing is lost — sub-threshold candidates are still written to the DB. To see
+**everything**, including the hidden ones:
+
+- Web: open `/?include_all=true` (the bar shows how many are hidden and links to it).
+- API: `GET /api/candidates?status=pending&include_all=true`.
+
+---
+
+## Resilience
+
+The sidecar is built to ride out the flaky bits of its dependencies without
+operator intervention:
+
+- **Transient failures are retried with backoff.** Connection errors, timeouts,
+  and `5xx` responses from Homebox — and rate-limit blips from DuckDuckGo — are
+  retried up to 3 times with exponential backoff (1s → 2s → 4s). Hard `4xx`
+  responses are *not* retried.
+- **Token expiry pauses, never crashes.** If credentials (`HOMEBOX_USER` +
+  `HOMEBOX_PASSWORD`) are set, an expired token is refreshed automatically and
+  the request retried. If only a static `HOMEBOX_TOKEN` is configured, a `401`
+  mid-sweep logs a clear warning and **pauses that sweep**; the service and the
+  review queue stay up and the next interval retries (just drop in a fresh
+  token). Either way the scheduler loop keeps running.
+- **A failed sweep is non-fatal.** An unreachable Homebox or a search/Ollama
+  failure is logged and skipped; the queue stays available and the next sweep
+  tries again.
 
 ---
 

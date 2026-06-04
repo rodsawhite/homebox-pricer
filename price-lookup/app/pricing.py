@@ -26,6 +26,10 @@ logger = logging.getLogger(__name__)
 # Seconds to wait between DDG requests to avoid rate-limiting.
 _DDG_DELAY = 2.0
 
+# Bounded retry for transient DDG search failures (rate limits, blips).
+_DDG_MAX_ATTEMPTS = 3
+_DDG_BACKOFF_BASE = 1.0  # seconds: 1s, 2s, 4s
+
 # Prompt template. The model is told to return *only* JSON so the parser
 # can be strict. A trailing note about the current AUD bias is included
 # because many results default to USD without it.
@@ -132,6 +136,30 @@ def _coerce_confidence(raw: Any, source: str) -> str:
     return level
 
 
+def _ddg_search(query: str, region: str) -> list[dict[str, Any]]:
+    """Run a DDG text search with bounded exponential backoff.
+
+    Raises the last exception if every attempt fails — the caller turns that
+    into a null result so the sweep never crashes.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(_DDG_MAX_ATTEMPTS):
+        try:
+            with DDGS() as ddgs:
+                return list(ddgs.text(query, region=region, max_results=8))
+        except Exception as exc:  # DDGS raises a variety of error types
+            last_exc = exc
+            if attempt == _DDG_MAX_ATTEMPTS - 1:
+                raise
+            delay = _DDG_BACKOFF_BASE * (2 ** attempt)
+            logger.warning(
+                "DDG search failed for %r (attempt %d/%d): %s — retrying in %.0fs",
+                query, attempt + 1, _DDG_MAX_ATTEMPTS, exc, delay,
+            )
+            time.sleep(delay)
+    raise last_exc  # pragma: no cover — loop either returns or raises above
+
+
 def _null_result(reason: str) -> dict[str, Any]:
     return {
         "price": None,
@@ -155,12 +183,7 @@ def lookup_price(query: str) -> dict[str, Any]:
 
     logger.info("DDG search: %r", ddg_query)
     try:
-        with DDGS() as ddgs:
-            hits = list(ddgs.text(
-                ddg_query,
-                region=settings.price_region,
-                max_results=8,
-            ))
+        hits = _ddg_search(ddg_query, settings.price_region)
     except Exception as exc:
         logger.warning("DDG search failed for %r: %s", query, exc)
         return _null_result(f"search failed: {exc}")

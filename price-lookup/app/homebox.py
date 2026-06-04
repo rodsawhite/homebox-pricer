@@ -11,7 +11,8 @@ observed to silently drop custom fields on some Homebox versions.
 from __future__ import annotations
 
 import logging
-from typing import Any
+import time
+from typing import Any, Callable
 
 import httpx
 
@@ -19,9 +20,63 @@ from .config import get_settings
 
 logger = logging.getLogger(__name__)
 
+# Bounded retry for *transient* failures only (connection errors, timeouts,
+# 5xx). 4xx — including the 401 token-expiry case — is never retried here; that
+# path is handled by the explicit _refresh_if_needed login flow.
+_MAX_ATTEMPTS = 3
+_BACKOFF_BASE = 1.0  # seconds: 1s, 2s, 4s — overridable/mockable in tests
+
 
 class HomeboxError(Exception):
     pass
+
+
+class HomeboxAuthError(HomeboxError):
+    """Raised on a 401 we can't recover from (static token expired, no creds).
+
+    Subclasses HomeboxError so existing ``except HomeboxError`` handlers still
+    catch it, while callers that care can distinguish "token expired" from a
+    generic failure and pause rather than thrash.
+    """
+
+
+def _retry_request(
+    send: Callable[[], httpx.Response], *, what: str
+) -> httpx.Response:
+    """Call ``send`` with exponential backoff on transient failures.
+
+    "Transient" means connection errors, timeouts, and 5xx responses. A 5xx is
+    retried then returned for the caller to raise on if it persists; any other
+    status (2xx, or 4xx incl. the 401 refresh handshake) is returned
+    immediately for the caller to inspect. Raises HomeboxError only after
+    exhausting attempts on a transport error.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(_MAX_ATTEMPTS):
+        is_last = attempt == _MAX_ATTEMPTS - 1
+        try:
+            resp = send()
+        except (httpx.TransportError, httpx.TimeoutException) as exc:
+            last_exc = exc
+            if is_last:
+                break
+            _backoff(attempt, what, str(exc))
+            continue
+        # 5xx is transient server-side; retry unless we're out of attempts.
+        if resp.status_code >= 500 and not is_last:
+            _backoff(attempt, what, f"HTTP {resp.status_code}")
+            continue
+        return resp
+    raise HomeboxError(f"{what}: transport error after {_MAX_ATTEMPTS} attempts: {last_exc}")
+
+
+def _backoff(attempt: int, what: str, cause: str) -> None:
+    delay = _BACKOFF_BASE * (2 ** attempt)
+    logger.warning(
+        "Transient Homebox error on %s (attempt %d/%d): %s — retrying in %.0fs",
+        what, attempt + 1, _MAX_ATTEMPTS, cause, delay,
+    )
+    time.sleep(delay)
 
 
 class HomeboxClient:
@@ -80,12 +135,18 @@ class HomeboxClient:
     def _get_items_page(self, page: int) -> list[dict[str, Any]]:
         url = f"{self._base}/api/v1/items"
         params = {"page": page, "pageSize": 100}
+        what = f"list_items page={page}"
         for attempt in range(2):
-            resp = httpx.get(url, headers=self._auth_header(), params=params, timeout=15)
-            if resp.status_code == 401 and attempt == 0 and self._refresh_if_needed(401):
-                continue
+            resp = _retry_request(
+                lambda: httpx.get(url, headers=self._auth_header(), params=params, timeout=15),
+                what=what,
+            )
+            if resp.status_code == 401:
+                if attempt == 0 and self._refresh_if_needed(401):
+                    continue
+                raise HomeboxAuthError(f"{what}: 401 (token expired, no credentials to refresh)")
             if resp.status_code != 200:
-                raise HomeboxError(f"list_items page={page}: {resp.status_code} {resp.text[:200]}")
+                raise HomeboxError(f"{what}: {resp.status_code} {resp.text[:200]}")
             data = resp.json()
             # Homebox wraps paginated results in {"items": [...], "total": N}
             # Fall back to a bare list for forward compat.
@@ -96,24 +157,36 @@ class HomeboxClient:
 
     def get_item(self, item_id: str) -> dict[str, Any]:
         url = f"{self._base}/api/v1/items/{item_id}"
+        what = f"get_item {item_id}"
         for attempt in range(2):
-            resp = httpx.get(url, headers=self._auth_header(), timeout=10)
-            if resp.status_code == 401 and attempt == 0 and self._refresh_if_needed(401):
-                continue
+            resp = _retry_request(
+                lambda: httpx.get(url, headers=self._auth_header(), timeout=10),
+                what=what,
+            )
+            if resp.status_code == 401:
+                if attempt == 0 and self._refresh_if_needed(401):
+                    continue
+                raise HomeboxAuthError(f"{what}: 401 (token expired, no credentials to refresh)")
             if resp.status_code != 200:
-                raise HomeboxError(f"get_item {item_id}: {resp.status_code} {resp.text[:200]}")
+                raise HomeboxError(f"{what}: {resp.status_code} {resp.text[:200]}")
             return resp.json()
         return {}  # unreachable
 
     def put_item(self, item_id: str, item: dict[str, Any]) -> None:
         """Write the full item object back (read-modify-write pattern)."""
         url = f"{self._base}/api/v1/items/{item_id}"
+        what = f"put_item {item_id}"
         for attempt in range(2):
-            resp = httpx.put(url, headers=self._auth_header(), json=item, timeout=10)
-            if resp.status_code == 401 and attempt == 0 and self._refresh_if_needed(401):
-                continue
+            resp = _retry_request(
+                lambda: httpx.put(url, headers=self._auth_header(), json=item, timeout=10),
+                what=what,
+            )
+            if resp.status_code == 401:
+                if attempt == 0 and self._refresh_if_needed(401):
+                    continue
+                raise HomeboxAuthError(f"{what}: 401 (token expired, no credentials to refresh)")
             if resp.status_code not in (200, 204):
-                raise HomeboxError(f"put_item {item_id}: {resp.status_code} {resp.text[:200]}")
+                raise HomeboxError(f"{what}: {resp.status_code} {resp.text[:200]}")
             return
 
     def apply_price(self, item_id: str, price: float) -> None:

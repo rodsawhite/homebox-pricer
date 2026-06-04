@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     server_port: int = 8091
     db_path: str = "/data/price.db"
 
+    # --- Observability ---
+    # "plain" keeps the human-readable logs; "json" emits one JSON object per
+    # line for log shippers. Default plain so existing readable logs stay.
+    log_format: str = "plain"
+
 
 def get_settings() -> Settings:
     """Return a fresh Settings instance (kept callable for easy test overrides)."""

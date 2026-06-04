@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 
 from .config import get_settings
 from .db import init_db, pending_homebox_ids, update_candidate_price, upsert_candidate
-from .homebox import HomeboxClient, HomeboxError
+from .homebox import HomeboxAuthError, HomeboxClient, HomeboxError
 from .pricing import lookup_price
 
 logger = logging.getLogger(__name__)
@@ -38,6 +38,15 @@ async def run_sweep() -> dict[str, int]:
 
     try:
         items = client.list_items()
+    except HomeboxAuthError as exc:
+        # Static token expired and no credentials to refresh with. Pause this
+        # sweep gracefully — the service and review queue stay up, and the next
+        # interval retries. A human just needs to drop in a fresh token.
+        logger.warning(
+            "Sweep paused — Homebox token expired and no credentials to refresh "
+            "(set HOMEBOX_USER/HOMEBOX_PASSWORD for auto-refresh): %s", exc,
+        )
+        return counts
     except HomeboxError as exc:
         logger.error("Sweep aborted — Homebox unreachable: %s", exc)
         return counts
@@ -82,12 +91,16 @@ async def run_sweep() -> dict[str, int]:
         logger.info(
             "Queued item %s (%s): price=%s confidence=%s",
             item_id, name, result["price"], result["confidence"],
+            extra={"item_id": item_id, "price": result["price"],
+                   "confidence": result["confidence"]},
         )
 
     _last_sweep = datetime.now(timezone.utc)
     logger.info(
         "Sweep complete: scanned=%d queued=%d skipped=%d",
         counts["scanned"], counts["queued"], counts["skipped"],
+        extra={"scanned": counts["scanned"], "queued": counts["queued"],
+               "skipped": counts["skipped"]},
     )
     return counts
 

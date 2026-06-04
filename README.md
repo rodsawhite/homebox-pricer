@@ -96,7 +96,9 @@ All config is via environment variables in `.env`. See [`.env.example`](.env.exa
 | `PRICE_TEXT_MODEL` | no | Local Ollama model for price parsing (default `qwen2.5:3b`) |
 | `PRICE_REGION` | no | Search region (default `au-en`) |
 | `PRICE_CURRENCY` | no | Currency code (default `AUD`) |
+| `PRICE_MIN_CONFIDENCE` | no | Hide queue candidates below this confidence — `low`/`medium`/`high` (default `low`) |
 | `CHECK_INTERVAL` | no | Seconds between price sweeps (default `3600`) |
+| `LOG_FORMAT` | no | `plain` (default) or `json` log output |
 
 ### Getting a Homebox token
 

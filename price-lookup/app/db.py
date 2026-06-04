@@ -13,6 +13,16 @@ from typing import Generator
 
 from .config import get_settings
 
+# Confidence levels, lowest to highest. Used to pre-filter the review queue:
+# a candidate is shown only if its rank >= the configured threshold's rank.
+_CONFIDENCE_ORDER = {"low": 0, "medium": 1, "high": 2}
+
+
+def confidence_rank(level: str | None) -> int:
+    """Map a confidence label to its rank; unknown/None sorts as lowest."""
+    return _CONFIDENCE_ORDER.get((level or "").lower(), 0)
+
+
 _CREATE_SQL = """
 CREATE TABLE IF NOT EXISTS price_candidates (
     id          INTEGER PRIMARY KEY,
@@ -92,16 +102,31 @@ def get_candidate(candidate_id: int) -> sqlite3.Row | None:
         ).fetchone()
 
 
-def list_candidates(status: str | None = None) -> list[sqlite3.Row]:
+def list_candidates(
+    status: str | None = None, min_confidence: str | None = None
+) -> list[sqlite3.Row]:
+    """List candidates, newest first.
+
+    ``min_confidence`` hides candidates whose confidence ranks below the given
+    threshold (low < medium < high). Candidates are always *stored* regardless
+    of confidence — this filter is purely a view concern so nothing is lost.
+    Confidence labels are text, so the threshold is applied in Python rather
+    than SQL.
+    """
     with get_conn() as conn:
         if status:
-            return conn.execute(
+            rows = conn.execute(
                 "SELECT * FROM price_candidates WHERE status = ? ORDER BY created_at DESC",
                 (status,),
             ).fetchall()
-        return conn.execute(
-            "SELECT * FROM price_candidates ORDER BY created_at DESC"
-        ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM price_candidates ORDER BY created_at DESC"
+            ).fetchall()
+    if min_confidence:
+        floor = confidence_rank(min_confidence)
+        rows = [r for r in rows if confidence_rank(r["confidence"]) >= floor]
+    return rows
 
 
 def set_candidate_status(

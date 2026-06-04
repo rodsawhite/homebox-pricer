@@ -152,13 +152,13 @@ iPhone.
 
 ## Phase 5 — Hardening + polish
 
-- [ ] Handle token expiry mid-sweep (re-login if creds present, else pause + warn)
-- [ ] Retry/backoff for transient Homebox or search failures
-- [ ] Confidence threshold config (`PRICE_MIN_CONFIDENCE`) to pre-filter the queue
-- [ ] Structured logging
-- [ ] `tests/` — unit tests for query building, price parsing, AUD disambiguation
-- [ ] Dockerfile multi-stage build; pin base image
-- [ ] README pass: real screenshots of the review queue
+- [x] Handle token expiry mid-sweep (re-login if creds present, else pause + warn)
+- [x] Retry/backoff for transient Homebox or search failures
+- [x] Confidence threshold config (`PRICE_MIN_CONFIDENCE`) to pre-filter the queue
+- [x] Structured logging
+- [x] `tests/` — unit tests for query building, price parsing, AUD disambiguation
+- [x] Dockerfile multi-stage build; pin base image
+- [ ] README pass: real screenshots of the review queue _(deferred — UI is documented textually; screenshots cannot be generated here)_
 
 **Done when:** the stack survives a token expiry and a Homebox restart without manual intervention.
 
