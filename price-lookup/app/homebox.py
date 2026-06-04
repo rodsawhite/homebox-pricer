@@ -83,7 +83,9 @@ class HomeboxClient:
     def __init__(self) -> None:
         s = get_settings()
         self._base = s.homebox_url.rstrip("/")
-        self._token: str = s.homebox_token
+        # Strip any "Bearer " prefix — Homebox v0.22.0+ includes it in the
+        # token value; users may also paste it verbatim from the Homebox UI.
+        self._token: str = s.homebox_token.removeprefix("Bearer ").strip()
         self._user: str = s.homebox_user
         self._password: str = s.homebox_password
 
@@ -105,7 +107,10 @@ class HomeboxClient:
         )
         if resp.status_code != 200:
             raise HomeboxError(f"Login failed: {resp.status_code} {resp.text[:200]}")
-        self._token = resp.json()["token"]
+        token = resp.json()["token"]
+        # Homebox v0.22.0+ returns tokens with the "Bearer " prefix built-in.
+        # Strip it so _auth_header() can apply it consistently.
+        self._token = token.removeprefix("Bearer ").strip()
         logger.info("Homebox login successful")
 
     def _refresh_if_needed(self, status_code: int) -> bool:
