@@ -1,28 +1,23 @@
 #!/usr/bin/env bash
-# Local Phase 1 verification — run this on the WSL host where Docker and your
-# .env (Anthropic key, Homebox token) are available. CI cannot do these steps
-# because they need a Docker daemon and real secrets.
+# Local stack verification — run this on the WSL host where Docker and your
+# .env (Homebox token) are available. CI cannot do these steps because they
+# need a Docker daemon and real secrets.
 #
 # Usage:
-#   scripts/verify-local.sh [--no-build] [--with-companion]
+#   scripts/verify-local.sh [--no-build]
 #
-#   --no-build        Skip the price-lookup image build (reuse the last one).
-#   --with-companion  Also start homebox-companion and probe its :8090 UI.
-#                     Confirms it boots and loads the Anthropic key; it does
-#                     NOT perform a real photo capture (that's a manual phone
-#                     test). Requires HBC_LLM_API_KEY in .env.
+#   --no-build   Skip the price-lookup image build (reuse the last one).
 #
+# Homebox Companion is NOT started here — it runs separately.
 # It is safe to re-run.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 BUILD=1
-WITH_COMPANION=0
 for arg in "$@"; do
   case "$arg" in
     --no-build) BUILD=0 ;;
-    --with-companion) WITH_COMPANION=1 ;;
     *) echo "unknown arg: $arg" >&2; exit 2 ;;
   esac
 done
@@ -47,8 +42,7 @@ if [[ "$BUILD" == "1" ]]; then
 fi
 
 step "Bringing up price-lookup (+ its deps: ollama, ollama-init)"
-# This blocks on ollama-init pulling the model; the first run may take a while
-# while the model downloads.
+# This blocks on ollama-init pulling the model; the first run may take a while.
 docker compose up -d price-lookup
 
 step "Confirming the price model is present in Ollama"
@@ -63,8 +57,7 @@ else
   exit 1
 fi
 
-step "Probing /health (up to ~30s)"
-# price-lookup publishes on host port 8091 (8090 is Homebox Companion).
+step "Probing /health on price-lookup :8091 (up to ~30s)"
 ok=0
 for _ in $(seq 1 15); do
   if curl -fsS http://localhost:8091/health | grep -q '"status":"ok"'; then
@@ -84,29 +77,6 @@ else
   exit 1
 fi
 
-if [[ "$WITH_COMPANION" == "1" ]]; then
-  step "Bringing up homebox-companion"
-  docker compose up -d homebox-companion
-
-  step "Probing Companion UI on :8090 (up to ~30s)"
-  cok=0
-  for _ in $(seq 1 15); do
-    # Companion serves its UI on 8090; any HTTP response means it booted.
-    if curl -fsS -o /dev/null http://localhost:8090/; then
-      cok=1; break
-    fi
-    sleep 2
-  done
-
-  if [[ "$cok" == "1" ]]; then
-    echo "Companion UI reachable on http://localhost:8090/"
-    echo "NOTE: this confirms Companion booted and loaded its config; it does"
-    echo "      NOT verify a real photo capture — do that from the iPhone."
-  else
-    echo "Companion did NOT respond — recent logs (check HBC_LLM_API_KEY):"
-    docker compose logs --tail=50 homebox-companion
-    exit 1
-  fi
-fi
-
-printf '\n\033[1;32mPhase 1 local verification passed.\033[0m\n'
+printf '\n\033[1;32mStack verification passed.\033[0m\n'
+printf 'Homebox Companion runs separately — start it independently and test\n'
+printf 'capture from the iPhone once the sidecar is confirmed healthy.\n'

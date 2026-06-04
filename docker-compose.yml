@@ -1,16 +1,14 @@
 # Homebox Pricer stack.
 #
-# Services: the upstream Homebox Companion (capture UI), a local Ollama
-# (price-text parsing only — capture vision runs on Claude Haiku 4.5 in the
-# cloud), a one-shot ollama-init that pulls the price model, and the
-# price-lookup sidecar built from ./price-lookup.
+# This compose file owns only the pricing sidecar and its Ollama dependency.
+# Homebox Companion (capture UI) runs separately — see its own docs at
+# https://github.com/Duelion/homebox-companion for how to configure it.
+# Homebox itself is also NOT managed here — it runs on the NAS.
 #
 # Model provisioning is automatic: `ollama-init` pulls PRICE_TEXT_MODEL into
 # the shared `ollama` volume on first `docker compose up`, and price-lookup
-# only starts once that pull has completed successfully — no manual
-# `ollama pull` step required.
+# only starts once that pull has completed — no manual `ollama pull` required.
 #
-# Homebox itself is NOT managed here — it runs separately on the NAS.
 # Copy .env.example to .env and fill it in before `docker compose up`.
 
 services:
@@ -21,8 +19,8 @@ services:
     volumes:
       - ollama:/root/.ollama
     healthcheck:
-      # `ollama list` talks to the daemon's API, so this is true readiness
-      # (the server is up and answering), not just "the binary exists".
+      # `ollama list` talks to the daemon's API — true readiness, not just
+      # "the binary exists".
       test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
       interval: 10s
       timeout: 5s
@@ -55,22 +53,6 @@ services:
         echo "Model ready: $${PRICE_TEXT_MODEL}";
     restart: "no"
 
-  homebox-companion:
-    image: ghcr.io/duelion/homebox-companion:latest
-    container_name: homebox-companion
-    restart: unless-stopped
-    ports:
-      - "8090:8090"
-    environment:
-      # Capture/image recognition uses Anthropic Claude Haiku 4.5 (cloud).
-      # No HBC_LLM_API_BASE needed — Companion resolves Anthropic natively.
-      HBC_LLM_API_KEY: ${HBC_LLM_API_KEY}
-      HBC_LLM_MODEL: ${HBC_LLM_MODEL:-anthropic/claude-haiku-4-5-20251001}
-      HBC_HOMEBOX_URL: ${HBC_HOMEBOX_URL:-${HOMEBOX_URL}}
-      HBC_SERVER_HOST: "0.0.0.0"
-      HBC_SERVER_PORT: "8090"
-    # Companion uses the Anthropic API (cloud) — no Ollama dependency.
-
   price-lookup:
     build: ./price-lookup
     container_name: price-lookup
@@ -90,13 +72,12 @@ services:
       CHECK_INTERVAL: ${CHECK_INTERVAL:-3600}
       SERVER_PORT: ${SERVER_PORT:-8091}
       DB_PATH: ${DB_PATH:-/data/price.db}
+      LOG_FORMAT: ${LOG_FORMAT:-plain}
     volumes:
       - price-data:/data
     depends_on:
       ollama:
         condition: service_healthy
-      # Wait until the price model has actually been pulled, so the first
-      # sweep can't fail on a missing model.
       ollama-init:
         condition: service_completed_successfully
 
