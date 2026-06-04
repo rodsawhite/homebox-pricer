@@ -240,7 +240,7 @@ def test_sweep_builds_query_from_item_fields(static_token_env, isolated_db):
         patch("app.scheduler.lookup_price", side_effect=fake_lookup),
     ):
         mclient.return_value.list_items.return_value = [item]
-        mclient.return_value.thumbnail_url.return_value = None
+
         asyncio.run(run_sweep())
 
     # manufacturer, name, model joined, then "price AUD" appended.
@@ -262,7 +262,7 @@ def test_sweep_skips_priced_and_pending(static_token_env, isolated_db):
             "confidence": "low", "reason": "r"}),
     ):
         mclient.return_value.list_items.return_value = items
-        mclient.return_value.thumbnail_url.return_value = None
+
         counts = asyncio.run(run_sweep())
     assert counts["scanned"] == 2
     assert counts["queued"] == 1

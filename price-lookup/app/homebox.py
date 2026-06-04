@@ -214,24 +214,6 @@ class HomeboxClient:
                 raise HomeboxError(f"{what}: {resp.status_code} {resp.text[:200]}")
             return
 
-    def thumbnail_url(self, item_id: str) -> str | None:
-        """Return the Homebox photo attachment URL for an item, or None.
-
-        Fetches the full item to read attachments. Returns None on any error
-        so a missing thumbnail never blocks a sweep.
-        """
-        try:
-            item = self.get_item(item_id)
-            attachments = item.get("attachments") or []
-            for att in attachments:
-                if att.get("type") == "photo":
-                    token = att.get("token") or ""
-                    if token:
-                        return f"{self._base}/api/v1/attachments/{token}"
-        except Exception:
-            pass
-        return None
-
     def apply_price(self, item_id: str, price: float) -> None:
         """Fetch the full item, set purchasePrice, write it back."""
         item = self.get_item(item_id)

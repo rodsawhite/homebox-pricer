@@ -76,7 +76,6 @@ async def run_sweep() -> dict[str, int]:
         query = " ".join(parts) + f" price {settings.price_currency}"
 
         result = lookup_price(query)
-        thumb = client.thumbnail_url(item_id)
 
         candidate_id = upsert_candidate(
             homebox_id=item_id,
@@ -87,7 +86,6 @@ async def run_sweep() -> dict[str, int]:
             source_url=result["source_url"],
             confidence=result["confidence"],
             reason=result["reason"],
-            thumbnail_url=thumb,
         )
         counts["queued"] += 1
         logger.info(
