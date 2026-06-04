@@ -5,12 +5,13 @@ FROM ghcr.io/astral-sh/uv:0.5.11-python3.12-bookworm-slim AS build
 WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 
-# Install dependencies first (cached layer), then the app.
-COPY pyproject.toml ./
+# Building the wheel needs the project metadata, its declared readme, and the
+# package itself — copy all three before installing. (Installing "." builds the
+# wheel, so a pyproject-only "deps layer" wouldn't actually cache anything.)
+COPY pyproject.toml README.md ./
+COPY app ./app
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --system --no-cache .
-
-COPY app ./app
 
 FROM python:3.12.8-slim-bookworm AS runtime
 
