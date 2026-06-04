@@ -6,6 +6,12 @@ credentials take precedence and the token is used only as a warm start.
 
 All write operations use PUT with the full item object — PATCH has been
 observed to silently drop custom fields on some Homebox versions.
+
+API reference: https://homebox.software/en/api/
+The PUT /items/{id} body follows the ItemUpdate schema: nested objects
+(location, labels, parent) are sent as flat IDs (locationId/labelIds/parentId),
+'attachments' is read-only and must be omitted, and empty UUID/date fields
+must be null (an empty string triggers a generic 500).
 """
 
 from __future__ import annotations
