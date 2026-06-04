@@ -22,11 +22,7 @@ def _isolated_db(tmp_path, monkeypatch):
 
 @pytest.fixture()
 def client(_isolated_db):
-    with (
-        patch("app.scheduler.scheduler_loop", new_callable=AsyncMock),
-        # Thumbnail fetch hits Homebox — stub it out so tests need no network.
-        patch("app.main._thumbnail_url", return_value=None),
-    ):
+    with patch("app.scheduler.scheduler_loop", new_callable=AsyncMock):
         import app.main as main_mod
         importlib.reload(main_mod)
         with TestClient(main_mod.app) as c:

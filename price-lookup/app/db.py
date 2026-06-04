@@ -25,24 +25,30 @@ def confidence_rank(level: str | None) -> int:
 
 _CREATE_SQL = """
 CREATE TABLE IF NOT EXISTS price_candidates (
-    id          INTEGER PRIMARY KEY,
-    homebox_id  TEXT NOT NULL,
-    item_name   TEXT NOT NULL,
-    query       TEXT NOT NULL,
-    price       REAL,
-    currency    TEXT DEFAULT 'AUD',
-    source_url  TEXT,
-    confidence  TEXT,
-    reason      TEXT,
-    status      TEXT DEFAULT 'pending',
-    created_at  TEXT,
-    decided_at  TEXT
+    id            INTEGER PRIMARY KEY,
+    homebox_id    TEXT NOT NULL,
+    item_name     TEXT NOT NULL,
+    query         TEXT NOT NULL,
+    price         REAL,
+    currency      TEXT DEFAULT 'AUD',
+    source_url    TEXT,
+    confidence    TEXT,
+    reason        TEXT,
+    status        TEXT DEFAULT 'pending',
+    created_at    TEXT,
+    decided_at    TEXT,
+    thumbnail_url TEXT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_pending_item
     ON price_candidates(homebox_id)
     WHERE status = 'pending';
 """
+
+# Applied to DBs created before thumbnail_url was added.
+_MIGRATIONS = [
+    "ALTER TABLE price_candidates ADD COLUMN thumbnail_url TEXT",
+]
 
 
 def _db_path() -> str:
@@ -67,6 +73,15 @@ def get_conn() -> Generator[sqlite3.Connection, None, None]:
 def init_db() -> None:
     with get_conn() as conn:
         conn.executescript(_CREATE_SQL)
+        existing = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(price_candidates)").fetchall()
+        }
+        for stmt in _MIGRATIONS:
+            # Derive the column name from "ALTER TABLE … ADD COLUMN <name> …"
+            col = stmt.split("ADD COLUMN")[1].strip().split()[0]
+            if col not in existing:
+                conn.execute(stmt)
 
 
 def upsert_candidate(
@@ -78,6 +93,7 @@ def upsert_candidate(
     source_url: str | None,
     confidence: str,
     reason: str,
+    thumbnail_url: str | None = None,
 ) -> int:
     """Insert a new pending candidate. Skips silently if one is already pending."""
     now = datetime.now(timezone.utc).isoformat()
@@ -86,11 +102,11 @@ def upsert_candidate(
             """
             INSERT OR IGNORE INTO price_candidates
                 (homebox_id, item_name, query, price, currency,
-                 source_url, confidence, reason, status, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+                 source_url, confidence, reason, status, created_at, thumbnail_url)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
             """,
             (homebox_id, item_name, query, price, currency,
-             source_url, confidence, reason, now),
+             source_url, confidence, reason, now, thumbnail_url),
         )
         return cur.lastrowid or 0
 

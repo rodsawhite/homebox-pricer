@@ -73,22 +73,6 @@ def status() -> dict[str, object]:
 # ---------------------------------------------------------------------------
 
 
-def _thumbnail_url(homebox_id: str) -> str | None:
-    """Return the Homebox attachment thumbnail URL for an item, or None."""
-    try:
-        item = HomeboxClient().get_item(homebox_id)
-        attachments = item.get("attachments") or []
-        for att in attachments:
-            if att.get("type") == "photo":
-                token = att.get("token") or ""
-                if token:
-                    settings = get_settings()
-                    return f"{settings.homebox_url.rstrip('/')}/api/v1/attachments/{token}"
-    except Exception:
-        pass
-    return None
-
-
 @app.get("/", response_class=HTMLResponse)
 def queue_page(
     request: Request,
@@ -100,11 +84,7 @@ def queue_page(
     settings = get_settings()
     min_conf = None if include_all else settings.price_min_confidence
     candidates_raw = list_candidates(status="pending", min_confidence=min_conf)
-    candidates = []
-    for row in candidates_raw:
-        c = dict(row)
-        c["thumbnail_url"] = _thumbnail_url(c["homebox_id"])
-        candidates.append(c)
+    candidates = [dict(row) for row in candidates_raw]
 
     # How many pending candidates are hidden by the confidence filter?
     total_pending = len(list_candidates(status="pending"))
