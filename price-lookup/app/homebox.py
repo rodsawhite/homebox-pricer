@@ -224,6 +224,13 @@ def _build_put_payload(item: dict) -> dict:
     labels = item.get("labels") or []
     parent = item.get("parent") or {}
 
+    def _date(value: Any) -> Any:
+        # Homebox returns unset dates as the zero year; send null instead so
+        # the PUT validator doesn't choke. Real dates pass through untouched.
+        if not value or str(value).startswith("0001-01-01"):
+            return None
+        return value
+
     return {
         "id": item.get("id", ""),
         "name": item.get("name", ""),
@@ -233,24 +240,25 @@ def _build_put_payload(item: dict) -> dict:
         "insured": item.get("insured", False),
         "archived": item.get("archived", False),
         "syncChildItemsLocations": item.get("syncChildItemsLocations", False),
-        # Nested → flat IDs
-        "locationId": loc.get("id", ""),
+        # Nested → flat IDs. Empty UUIDs must be null, not "" — an empty
+        # string fails Homebox's UUID parse and triggers a generic 500.
+        "locationId": loc.get("id") or None,
         "labelIds": [lbl["id"] for lbl in labels if lbl.get("id")],
-        "parentId": parent.get("id", ""),
+        "parentId": parent.get("id") or None,
         # Identifications
         "serialNumber": item.get("serialNumber", ""),
         "modelNumber": item.get("modelNumber", ""),
         "manufacturer": item.get("manufacturer", ""),
         # Warranty
         "lifetimeWarranty": item.get("lifetimeWarranty", False),
-        "warrantyExpires": item.get("warrantyExpires", "0001-01-01"),
+        "warrantyExpires": _date(item.get("warrantyExpires")),
         "warrantyDetails": item.get("warrantyDetails", ""),
         # Purchase
-        "purchaseTime": item.get("purchaseTime", "0001-01-01"),
+        "purchaseTime": _date(item.get("purchaseTime")),
         "purchaseFrom": item.get("purchaseFrom", ""),
         "purchasePrice": item.get("purchasePrice", 0),
         # Sold
-        "soldTime": item.get("soldTime", "0001-01-01"),
+        "soldTime": _date(item.get("soldTime")),
         "soldTo": item.get("soldTo", ""),
         "soldPrice": item.get("soldPrice", 0),
         "soldNotes": item.get("soldNotes", ""),
