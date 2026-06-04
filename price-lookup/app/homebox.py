@@ -218,7 +218,7 @@ class HomeboxClient:
         """Fetch the full item, set purchasePrice, write it back."""
         item = self.get_item(item_id)
         payload = _build_put_payload(item)
-        payload["purchasePrice"] = price
+        payload["purchasePrice"] = str(price)
         self.put_item(item_id, payload)
         logger.info("Applied price %.2f to item %s", price, item_id)
 
@@ -269,11 +269,13 @@ def _build_put_payload(item: dict) -> dict:
         # Purchase
         "purchaseTime": _date(item.get("purchaseTime")),
         "purchaseFrom": item.get("purchaseFrom", ""),
-        "purchasePrice": item.get("purchasePrice", 0),
+        # Homebox serialises price fields with json:",string" — the PUT body
+        # must send them as JSON strings ("29.99"), not numbers (29.99).
+        "purchasePrice": str(item.get("purchasePrice") or 0),
         # Sold
         "soldTime": _date(item.get("soldTime")),
         "soldTo": item.get("soldTo", ""),
-        "soldPrice": item.get("soldPrice", 0),
+        "soldPrice": str(item.get("soldPrice") or 0),
         "soldNotes": item.get("soldNotes", ""),
         # Extras
         "notes": item.get("notes", ""),
