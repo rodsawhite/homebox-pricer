@@ -204,6 +204,57 @@ class HomeboxClient:
     def apply_price(self, item_id: str, price: float) -> None:
         """Fetch the full item, set purchasePrice, write it back."""
         item = self.get_item(item_id)
-        item["purchasePrice"] = price
-        self.put_item(item_id, item)
+        payload = _build_put_payload(item)
+        payload["purchasePrice"] = price
+        self.put_item(item_id, payload)
         logger.info("Applied price %.2f to item %s", price, item_id)
+
+
+def _build_put_payload(item: dict) -> dict:
+    """Convert a GET ItemOut response to a PUT ItemUpdate-compatible payload.
+
+    Homebox's GET response (ItemOut) contains read-only fields like
+    'attachments' and nested objects (location, labels, parent) that the
+    PUT endpoint (ItemUpdate) does not accept — sending them back causes 500.
+    This function projects only the writable scalar fields and maps nested
+    objects to their flat ID equivalents that ItemUpdate expects.
+    """
+    # location and labels come back as objects; PUT wants their IDs only.
+    loc = item.get("location") or {}
+    labels = item.get("labels") or []
+    parent = item.get("parent") or {}
+
+    return {
+        "id": item.get("id", ""),
+        "name": item.get("name", ""),
+        "description": item.get("description", ""),
+        "assetId": item.get("assetId", "0"),
+        "quantity": item.get("quantity", 1),
+        "insured": item.get("insured", False),
+        "archived": item.get("archived", False),
+        "syncChildItemsLocations": item.get("syncChildItemsLocations", False),
+        # Nested → flat IDs
+        "locationId": loc.get("id", ""),
+        "labelIds": [lbl["id"] for lbl in labels if lbl.get("id")],
+        "parentId": parent.get("id", ""),
+        # Identifications
+        "serialNumber": item.get("serialNumber", ""),
+        "modelNumber": item.get("modelNumber", ""),
+        "manufacturer": item.get("manufacturer", ""),
+        # Warranty
+        "lifetimeWarranty": item.get("lifetimeWarranty", False),
+        "warrantyExpires": item.get("warrantyExpires", "0001-01-01"),
+        "warrantyDetails": item.get("warrantyDetails", ""),
+        # Purchase
+        "purchaseTime": item.get("purchaseTime", "0001-01-01"),
+        "purchaseFrom": item.get("purchaseFrom", ""),
+        "purchasePrice": item.get("purchasePrice", 0),
+        # Sold
+        "soldTime": item.get("soldTime", "0001-01-01"),
+        "soldTo": item.get("soldTo", ""),
+        "soldPrice": item.get("soldPrice", 0),
+        "soldNotes": item.get("soldNotes", ""),
+        # Extras
+        "notes": item.get("notes", ""),
+        "fields": item.get("fields", []),
+    }
