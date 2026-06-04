@@ -195,7 +195,7 @@ class HomeboxClient:
         """Write the full item object back (read-modify-write pattern)."""
         url = f"{self._base}/api/v1/items/{item_id}"
         what = f"put_item {item_id}"
-        logger.debug("PUT %s body=%s", item_id, json.dumps(item))
+        logger.info("PUT %s body=%s", item_id, json.dumps(item))
         for attempt in range(2):
             resp = _retry_request(
                 lambda: httpx.put(url, headers=self._auth_header(), json=item, timeout=10),
@@ -217,8 +217,10 @@ class HomeboxClient:
     def apply_price(self, item_id: str, price: float) -> None:
         """Fetch the full item, set purchasePrice, write it back."""
         item = self.get_item(item_id)
+        logger.info("apply_price GET response for %s: %s", item_id, json.dumps(item))
         payload = _build_put_payload(item)
         payload["purchasePrice"] = str(price)
+        logger.info("apply_price PUT payload for %s: %s", item_id, json.dumps(payload))
         self.put_item(item_id, payload)
         logger.info("Applied price %.2f to item %s", price, item_id)
 
