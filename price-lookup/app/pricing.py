@@ -17,7 +17,14 @@ import time
 from typing import Any
 
 import httpx
-from duckduckgo_search import DDGS
+
+# The library was renamed duckduckgo_search → ddgs. The old name still imports
+# but its backend now returns empty results, so prefer ddgs and fall back only
+# for older environments.
+try:
+    from ddgs import DDGS
+except ImportError:  # pragma: no cover - legacy fallback
+    from duckduckgo_search import DDGS
 
 from .config import get_settings
 
