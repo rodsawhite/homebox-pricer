@@ -102,7 +102,14 @@ class HomeboxClient:
         url = f"{self._base}/api/v1/users/login"
         resp = httpx.post(
             url,
-            data={"username": self._user, "password": self._password},
+            # stayLoggedIn is required: without it Homebox issues a short-lived
+            # session token that 401s on the very next API call. With it we get
+            # a proper bearer token good for the configured lifetime.
+            data={
+                "username": self._user,
+                "password": self._password,
+                "stayLoggedIn": True,
+            },
             timeout=10,
         )
         if resp.status_code != 200:
