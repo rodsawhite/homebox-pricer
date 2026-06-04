@@ -47,9 +47,10 @@ NVIDIA driver present (RTX 3070).
 
 ### VRAM & RAM headroom
 
-- [ ] 🟢 Sanity-check the VRAM budget: the single model `qwen2.5vl:3b` uses ~3–4 GB of the
-      3070's **8 GB VRAM**, leaving room for image tokens and context. (VRAM is the GPU's
-      own memory — separate from the WSL system-RAM cap below.)
+- [ ] 🟢 Sanity-check the VRAM budget: the local text model `qwen2.5:3b` uses ~2–3 GB of the
+      3070's **8 GB VRAM** (capture/vision runs in the cloud on Claude Haiku 4.5, so it does
+      not consume VRAM). Plenty of headroom. (VRAM is the GPU's own memory — separate from
+      the WSL system-RAM cap below.)
 - [ ] 🔴 (If containers feel starved) raise the WSL2 **system RAM** cap in
       `%UserProfile%\.wslconfig` — this governs host RAM for the containers/Ollama overhead,
       not VRAM:
@@ -63,11 +64,11 @@ NVIDIA driver present (RTX 3070).
 ### iPhone reachability (LAN)
 
 - [ ] 🔴 Add **one inbound Windows Firewall rule** allowing TCP on ports **8000**
-      (Companion) and **8090** (review queue). Docker Desktop forwards published ports to
+      (Companion) and **8091** (review queue). Docker Desktop forwards published ports to
       the host, but Windows Firewall blocks inbound LAN connections by default.
 - [ ] 🔴 Find the Windows LAN IP (`ipconfig` → IPv4) and reserve a static DHCP lease for it
       on the router so it doesn't change
-- [ ] 🟢 / 🔴 Smoke test from the iPhone once Phase 1 is up: `http://<windows-LAN-IP>:8000`
+- [ ] 🟢 / 🔴 Smoke test from the iPhone once Phase 1 is up: `http://<windows-LAN-IP>:8090`
       *(Claude Code can confirm the port is listening on the host; the actual phone test is
       yours.)*
 
@@ -91,27 +92,31 @@ iPhone.
 
 ## Phase 1 — Stack skeleton
 
-- [ ] Write `docker-compose.yml` with three services: `homebox-companion`, `ollama`, `price-lookup`
-- [ ] Add GPU `deploy.resources` block to the `ollama` service
-- [ ] Add a healthcheck to `ollama`; make `homebox-companion` and `price-lookup` depend on it
-- [ ] Create `.env.example` and document every variable
-- [ ] Bring the stack up with a placeholder `price-lookup` (health endpoint only)
-- [ ] Pull the single model: `qwen2.5vl:3b` (serves both capture and price parsing)
-- [ ] Verify Companion reaches Ollama and Homebox (do one test capture end-to-end)
+- [x] Write `docker-compose.yml` with services: `homebox-companion`, `ollama`, `ollama-init`, `price-lookup`
+- [x] Add GPU `deploy.resources` block to the `ollama` service
+- [x] Add a healthcheck to `ollama` (true daemon readiness via `ollama list`); make `homebox-companion` and `price-lookup` depend on it
+- [x] Auto-provision the model: `ollama-init` one-shot pulls `PRICE_TEXT_MODEL` into the shared volume; `price-lookup` waits on `service_completed_successfully` (no manual pull)
+- [x] Create `.env.example` and document every variable (incl. `HBC_LLM_API_KEY` Anthropic key)
+- [x] Configure Companion for Claude Haiku 4.5: `HBC_LLM_MODEL=anthropic/claude-haiku-4-5-20251001`,
+      Anthropic key in `HBC_LLM_API_KEY`, `HBC_LLM_API_BASE` left blank
+- [ ] **Verify the Companion↔Anthropic assumption**: confirm the Companion build accepts an
+      Anthropic provider and this model alias (check its LLM config docs); adjust env names/format if needed
+- [x] Bring the stack up with a placeholder `price-lookup` (health endpoint only)
+- [ ] Verify Companion reaches Anthropic and Homebox (do one test capture end-to-end) — run `scripts/verify-local.sh` on the host
 
-**Done when:** a photo taken on the iPhone creates an item in Homebox, and `price-lookup` answers `/health`.
+**Done when:** a photo taken on the iPhone creates an item in Homebox (via Claude Haiku 4.5), and `price-lookup` answers `/health`.
 
 ---
 
 ## Phase 2 — Homebox client + scan
 
-- [ ] `config.py` — load settings from env via pydantic-settings
-- [ ] `homebox.py` — login / token-refresh, `list_items` (paginated), `get_item`, `put_item`
-- [ ] `db.py` — create SQLite schema, insert/query/update candidates
-- [ ] `scheduler.py` — background loop every `CHECK_INTERVAL`
-- [ ] Scan logic: fetch all items, filter to unpriced, skip ones with an open candidate
-- [ ] `/status` and `/api/sweep` endpoints
-- [ ] Log how many items are unpriced on each sweep
+- [x] `config.py` — load settings from env via pydantic-settings
+- [x] `homebox.py` — login / token-refresh, `list_items` (paginated), `get_item`, `put_item`
+- [x] `db.py` — create SQLite schema, insert/query/update candidates
+- [x] `scheduler.py` — background loop every `CHECK_INTERVAL`
+- [x] Scan logic: fetch all items, filter to unpriced, skip ones with an open candidate
+- [x] `/status` and `/api/sweep` endpoints
+- [x] Log how many items are unpriced on each sweep
 
 **Done when:** a manual `POST /api/sweep` populates the candidates table with the right items (price still null).
 
@@ -119,14 +124,14 @@ iPhone.
 
 ## Phase 3 — Pricing pipeline
 
-- [ ] Add `duckduckgo_search` (DDGS) to dependencies
-- [ ] `pricing.py` — build query from name + manufacturer + model, search region `au-en`
-- [ ] Pass titles + snippets to Ollama `qwen2.5vl:3b` (text-only use) with a strict JSON-output prompt
-- [ ] Parse model output → `{price, currency, source, confidence, reason}`
-- [ ] AUD disambiguation: prefer `.com.au` / explicit `AUD`; mark `$`-only results low-confidence
-- [ ] Store results back on the candidate rows
-- [ ] `/api/lookup` ad-hoc endpoint for one-off queries (no Homebox write)
-- [ ] Add basic rate limiting / politeness delay between searches
+- [x] Add `duckduckgo_search` (DDGS) to dependencies
+- [x] `pricing.py` — build query from name + manufacturer + model, search region `au-en`
+- [x] Pass titles + snippets to Ollama `qwen2.5:3b` (local text model) with a strict JSON-output prompt
+- [x] Parse model output → `{price, currency, source, confidence, reason}`
+- [x] AUD disambiguation: prefer `.com.au` / explicit `AUD`; mark `$`-only results low-confidence
+- [x] Store results back on the candidate rows
+- [x] `/api/lookup` ad-hoc endpoint for one-off queries (no Homebox write)
+- [x] Add basic rate limiting / politeness delay between searches
 
 **Done when:** a sweep fills candidates with plausible AUD prices and confidence levels.
 
@@ -134,12 +139,12 @@ iPhone.
 
 ## Phase 4 — Review queue UI
 
-- [ ] `templates/queue.html` — server-rendered list: thumbnail, name, candidate price, source link, confidence badge
-- [ ] Approve / Reject / Edit actions wired to the API
-- [ ] Approve flow: GET item → set `purchasePrice` → PUT back → mark `applied`
-- [ ] Edit flow: let the human override price/source before approving
-- [ ] Empty state + last-sweep summary on the page
-- [ ] Pull the item thumbnail from Homebox for visual confirmation
+- [x] `templates/queue.html` — server-rendered list: thumbnail, name, candidate price, source link, confidence badge
+- [x] Approve / Reject / Edit actions wired to the API
+- [x] Approve flow: GET item → set `purchasePrice` → PUT back → mark `applied`
+- [x] Edit flow: let the human override price/source before approving
+- [x] Empty state + last-sweep summary on the page
+- [x] Pull the item thumbnail from Homebox for visual confirmation
 
 **Done when:** approving a candidate writes the price into Homebox and it shows in the Homebox UI.
 
@@ -147,13 +152,13 @@ iPhone.
 
 ## Phase 5 — Hardening + polish
 
-- [ ] Handle token expiry mid-sweep (re-login if creds present, else pause + warn)
-- [ ] Retry/backoff for transient Homebox or search failures
-- [ ] Confidence threshold config (`PRICE_MIN_CONFIDENCE`) to pre-filter the queue
-- [ ] Structured logging
-- [ ] `tests/` — unit tests for query building, price parsing, AUD disambiguation
-- [ ] Dockerfile multi-stage build; pin base image
-- [ ] README pass: real screenshots of the review queue
+- [x] Handle token expiry mid-sweep (re-login if creds present, else pause + warn)
+- [x] Retry/backoff for transient Homebox or search failures
+- [x] Confidence threshold config (`PRICE_MIN_CONFIDENCE`) to pre-filter the queue
+- [x] Structured logging
+- [x] `tests/` — unit tests for query building, price parsing, AUD disambiguation
+- [x] Dockerfile multi-stage build; pin base image
+- [ ] README pass: real screenshots of the review queue _(deferred — UI is documented textually; screenshots cannot be generated here)_
 
 **Done when:** the stack survives a token expiry and a Homebox restart without manual intervention.
 
