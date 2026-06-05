@@ -27,7 +27,7 @@ from .db import (
 from .homebox import HomeboxClient, HomeboxError
 from .logging_config import configure_logging
 from .pricing import lookup_price
-from .scheduler import last_sweep, run_sweep, scheduler_loop
+from .scheduler import build_search_query, last_sweep, run_sweep, scheduler_loop
 
 configure_logging(get_settings().log_format)
 
@@ -230,10 +230,7 @@ def api_relookup(candidate_id: int, request: Request) -> Any:
 
     settings = get_settings()
     name = item.get("name", "") or row["item_name"]
-    manufacturer = (item.get("manufacturer") or "").strip()
-    model = (item.get("modelNumber") or "").strip()
-    parts = [p for p in [manufacturer, name, model] if p]
-    query = " ".join(parts) + f" price {settings.price_currency}"
+    query = build_search_query(item, settings.price_currency)
 
     result = lookup_price(query)
     refresh_candidate(

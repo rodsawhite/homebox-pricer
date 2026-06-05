@@ -30,6 +30,40 @@ from app.pricing import (
     lookup_price,
 )
 from app.config import Settings
+from app.scheduler import build_search_query
+
+
+# ---------------------------------------------------------------------------
+# build_search_query
+# ---------------------------------------------------------------------------
+
+def test_build_query_no_manufacturer():
+    item = {"name": "TP-Link TL-SG108S-M2 2.5G Switch", "manufacturer": "", "modelNumber": ""}
+    assert build_search_query(item, "AUD") == "TP-Link TL-SG108S-M2 2.5G Switch price AUD"
+
+def test_build_query_manufacturer_already_in_name():
+    # manufacturer is redundant — name already starts with it → deduplicated.
+    item = {"name": "TP-Link TL-SG108S-M2 2.5G Switch", "manufacturer": "TP-Link", "modelNumber": ""}
+    assert build_search_query(item, "AUD") == "TP-Link TL-SG108S-M2 2.5G Switch price AUD"
+
+def test_build_query_distinct_manufacturer_prepended():
+    item = {"name": "WH-1000XM5", "manufacturer": "Sony", "modelNumber": ""}
+    assert build_search_query(item, "AUD") == "Sony WH-1000XM5 price AUD"
+
+def test_build_query_model_appended():
+    item = {"name": "Rice Cooker", "manufacturer": "Breville", "modelNumber": "BRC460"}
+    assert build_search_query(item, "AUD") == "Breville Rice Cooker BRC460 price AUD"
+
+def test_build_query_garbled_manufacturer_not_in_name_still_included():
+    # "Unilnik" is NOT a prefix of "TP-Link TL-SG108S-M2", so it gets prepended
+    # (we can't know it's garbage from the code — the user should fix it in Homebox).
+    item = {"name": "TP-Link TL-SG108S-M2 2.5G Switch", "manufacturer": "Unilnik", "modelNumber": ""}
+    q = build_search_query(item, "AUD")
+    assert q == "Unilnik TP-Link TL-SG108S-M2 2.5G Switch price AUD"
+
+def test_build_query_case_insensitive_dedup():
+    item = {"name": "tp-link TL-SG108", "manufacturer": "TP-Link", "modelNumber": ""}
+    assert build_search_query(item, "AUD") == "tp-link TL-SG108 price AUD"
 
 
 # ---------------------------------------------------------------------------
