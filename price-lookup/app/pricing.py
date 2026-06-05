@@ -194,6 +194,11 @@ def _scrape_prices(hits: list[dict[str, Any]], limit: int, timeout: float) -> No
 _STATICICE_HOST = "https://www.staticice.com.au"
 _STATICICE_SEARCH = _STATICICE_HOST + "/cgi-bin/search.cgi"
 
+# Minimum seconds between PricesAPI calls: personal plan allows 6 req/min.
+# 10s gives a comfortable margin (6 req/min = 1 every 10s).
+_PA_MIN_INTERVAL = 10.0
+_pa_last_call: float = 0.0  # module-level; reset between processes, which is fine
+
 _SI_PRICE_RE = re.compile(r"\$\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)")
 _TAG_RE = re.compile(r"<[^>]+>")
 _HREF_RE = re.compile(r'href=["\']([^"\']+)["\']', re.IGNORECASE)
@@ -297,42 +302,42 @@ def _staticice_lookup(query: str, timeout: float) -> dict[str, Any] | None:
 # offers inline. Country defaults to AU. It sits in the second tier — used only
 # when staticICE has no match — so we don't spend quota on common electronics.
 #
-# Confirmed response shape (api.pricesapi.io):
-#   {success, data:{products:[{title, price, currency, source, offers:[...],
-#                              offerCount}]}}
-# Each product carries a top-level price/currency; offers[] (when populated)
-# lists the same product across retailers. Offer field names aren't documented,
-# so the parser tries common variants and falls through if it can't read a price
-# — a schema mismatch degrades to the next tier, it never breaks the lookup.
-
-_PA_PRICE_KEYS = ("price", "amount", "value", "current_price", "currentPrice")
-_PA_CURRENCY_KEYS = ("currency", "priceCurrency", "currencyCode", "currency_code")
-_PA_URL_KEYS = ("url", "link", "href", "offerUrl", "offer_url")
-
-
-def _pa_first(obj: dict[str, Any], keys: tuple[str, ...]) -> Any:
-    for k in keys:
-        if obj.get(k) not in (None, ""):
-            return obj[k]
-    return None
+# Confirmed response shape (api.pricesapi.io, from official docs):
+#   {success, data:{query, country, products:[...]}, meta}
+# Each product: {pid, title, image, price, currency, source, rating, reviews,
+#                offerCount, offers:[...], ...}
+# Each offer has exactly 7 fields: seller, seller_url, price, currency,
+#   shipping, condition, url.
+# Auth: Authorization: Bearer <key>  (not x-api-key)
+# Cold calls run the live pipeline (30–90s); warm cache hits < 100ms.
+# Recommended client timeout: 95s.
 
 
 def _pa_offers(result: dict[str, Any]) -> list[dict[str, Any]]:
-    """Offers may be nested under a few likely keys, or be the result itself."""
-    for k in ("offers", "merchantOffers", "merchant_offers", "listings"):
-        val = result.get(k)
-        if isinstance(val, list):
-            return [o for o in val if isinstance(o, dict)]
-    return []
+    """Each offer has exactly: seller, seller_url, price, currency, shipping, condition, url."""
+    val = result.get("offers")
+    return [o for o in val if isinstance(o, dict)] if isinstance(val, list) else []
 
 
 def _pricesapi_lookup(query: str, settings: Any) -> dict[str, Any] | None:
     """Second-tier price source. Returns a result dict, or None to fall through."""
+    global _pa_last_call
+    elapsed = time.monotonic() - _pa_last_call
+    if elapsed < _PA_MIN_INTERVAL:
+        wait = _PA_MIN_INTERVAL - elapsed
+        logger.debug("PricesAPI rate-limit wait: %.1fs", wait)
+        time.sleep(wait)
+
     try:
         resp = httpx.get(
             settings.prices_api_url,
-            params={"q": query, "country": settings.prices_api_country, "limit": 5},
-            headers={"x-api-key": settings.prices_api_key},
+            params={
+                "q": query,
+                "country": settings.prices_api_country,
+                "limit": 5,
+                "offers_limit": 20,  # collect all offers for a robust median
+            },
+            headers={"Authorization": f"Bearer {settings.prices_api_key}"},
             timeout=settings.prices_api_timeout,
         )
         resp.raise_for_status()
@@ -343,6 +348,8 @@ def _pricesapi_lookup(query: str, settings: Any) -> dict[str, Any] | None:
     except Exception as exc:  # never let a parser bug break the lookup
         logger.warning("PricesAPI error for %r: %s — falling back", query, exc)
         return None
+    finally:
+        _pa_last_call = time.monotonic()
 
     # Confirmed shape: {data:{products:[...]}}. Tolerate "results" too.
     block = data.get("data", data) if isinstance(data, dict) else {}
@@ -366,18 +373,20 @@ def _pricesapi_lookup(query: str, settings: Any) -> dict[str, Any] | None:
     currency = best.get("currency")
     best_url = None
 
-    # Top-level product price.
-    top = _coerce_price(best.get("price"))
-    if top is not None:
-        prices.append(top)
-    # Per-retailer offers (field names vary — try common variants).
+    # Collect all per-retailer offer prices (exact field names confirmed in docs).
     for offer in _pa_offers(best):
-        p = _coerce_price(_pa_first(offer, _PA_PRICE_KEYS))
+        p = _coerce_price(offer.get("price"))
         if p is None:
             continue
         prices.append(p)
-        currency = currency or _pa_first(offer, _PA_CURRENCY_KEYS)
-        best_url = best_url or _pa_first(offer, _PA_URL_KEYS)
+        currency = currency or offer.get("currency")
+        best_url = best_url or offer.get("url") or offer.get("seller_url")
+
+    # Fall back to the candidate's headline price if offers are empty/degraded.
+    if not prices:
+        top = _coerce_price(best.get("price"))
+        if top is not None:
+            prices.append(top)
 
     if not prices:
         return None
@@ -389,7 +398,7 @@ def _pricesapi_lookup(query: str, settings: Any) -> dict[str, Any] | None:
         "currency": str(currency or settings.price_currency).upper(),
         "source_url": best_url,
         "confidence": confidence,
-        "reason": f"Median of {len(prices)} PricesAPI price(s) for {best.get('title', query)!r}"[:500],
+        "reason": f"Median of {len(prices)} PricesAPI offer(s) for {best.get('title', query)!r}"[:500],
     }
 
 

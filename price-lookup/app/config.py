@@ -39,9 +39,9 @@ class Settings(BaseSettings):
     prices_api_key: str = ""
     prices_api_url: str = "https://api.pricesapi.io/api/v1/products/search"
     prices_api_country: str = "au"
-    # PricesAPI scrapes in real time and can take ~45s per call, so it needs a
-    # much longer timeout than the page-scrape fetches.
-    prices_api_timeout: float = 90.0
+    # PricesAPI scrapes in real time (30–90s cold, <100ms cached). Docs recommend
+    # a 95s client read timeout. Rate limit: 6 req/min on Personal plan.
+    prices_api_timeout: float = 95.0
     # How many top search-result pages to fetch and scrape structured price
     # data (JSON-LD / og:price) from. 0 disables page fetching (snippets only).
     price_fetch_pages: int = 3
