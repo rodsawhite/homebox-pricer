@@ -20,6 +20,7 @@ from .db import (
     get_candidate,
     init_db,
     list_candidates,
+    refresh_candidate,
     set_candidate_status,
     update_candidate_price,
 )
@@ -198,6 +199,57 @@ def api_reject(candidate_id: int, request: Request) -> Any:
     if _wants_html(request):
         return RedirectResponse("/?flash=Candidate+rejected&flash_type=ok", status_code=303)
     return {"result": "rejected"}
+
+
+@app.post("/api/candidates/{candidate_id}/relookup")
+def api_relookup(candidate_id: int, request: Request) -> Any:
+    """Re-fetch the item from Homebox, rebuild the search query from current
+    metadata, run a fresh price lookup, and update the candidate in the DB.
+    Useful when the item's name, manufacturer, or model has been edited.
+    """
+    row = get_candidate(candidate_id)
+    if not row:
+        if _wants_html(request):
+            return RedirectResponse("/?flash=Candidate+not+found&flash_type=err", status_code=303)
+        raise HTTPException(404, "Candidate not found")
+    if row["status"] != "pending":
+        if _wants_html(request):
+            return RedirectResponse(
+                f"/?flash=Already+{row['status']}&flash_type=err", status_code=303
+            )
+        raise HTTPException(400, f"Candidate is already {row['status']}")
+
+    try:
+        item = HomeboxClient().get_item(row["homebox_id"])
+    except HomeboxError as exc:
+        if _wants_html(request):
+            return RedirectResponse(
+                f"/?flash=Homebox+error:+{exc}&flash_type=err", status_code=303
+            )
+        raise HTTPException(502, f"Homebox error: {exc}") from exc
+
+    settings = get_settings()
+    name = item.get("name", "") or row["item_name"]
+    manufacturer = (item.get("manufacturer") or "").strip()
+    model = (item.get("modelNumber") or "").strip()
+    parts = [p for p in [manufacturer, name, model] if p]
+    query = " ".join(parts) + f" price {settings.price_currency}"
+
+    result = lookup_price(query)
+    refresh_candidate(
+        candidate_id=candidate_id,
+        item_name=name,
+        query=query,
+        price=result["price"],
+        currency=result.get("currency", settings.price_currency),
+        source_url=result["source_url"],
+        confidence=result["confidence"],
+        reason=result["reason"],
+    )
+
+    if _wants_html(request):
+        return RedirectResponse("/?flash=Re-lookup+complete&flash_type=ok", status_code=303)
+    return {"result": "updated", **result}
 
 
 class CandidateEdit(BaseModel):

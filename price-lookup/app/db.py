@@ -166,6 +166,29 @@ def update_candidate_price(
         )
 
 
+def refresh_candidate(
+    candidate_id: int,
+    item_name: str,
+    query: str,
+    price: float | None,
+    currency: str,
+    source_url: str | None,
+    confidence: str,
+    reason: str,
+) -> None:
+    """Update a pending candidate with fresh lookup results and new item metadata."""
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE price_candidates
+               SET item_name=?, query=?, price=?, currency=?,
+                   source_url=?, confidence=?, reason=?
+             WHERE id=? AND status='pending'
+            """,
+            (item_name, query, price, currency, source_url, confidence, reason, candidate_id),
+        )
+
+
 def count_by_status() -> dict[str, int]:
     with get_conn() as conn:
         rows = conn.execute(

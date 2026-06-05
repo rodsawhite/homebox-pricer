@@ -187,6 +187,13 @@
           </form>
         </div>
 
+        {# Re-lookup: re-fetch item from Homebox and run a fresh price search #}
+        <form method="post" action="/api/candidates/{{ c.id }}/relookup">
+          <button type="submit" class="btn" style="width:100%;background:#6c757d;color:#fff;font-size:0.8rem">
+            ↻ Re-lookup from Homebox
+          </button>
+        </form>
+
         {# Edit price / source before approving #}
         <form method="post" action="/candidates/{{ c.id }}/edit">
           <div class="edit-row">
