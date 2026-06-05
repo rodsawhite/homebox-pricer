@@ -106,11 +106,13 @@
   <div class="upload-card">
     <div class="section-title">📥 Import Amazon order history</div>
     <ol>
-      <li>Go to <strong>amazon.com.au → Returns &amp; Orders → Order History Reports</strong></li>
-      <li>Select date range, click <strong>Request Report</strong>, then <strong>Download</strong></li>
-      <li>Upload the CSV file below</li>
+      <li>Go to <strong>amazon.com.au → Account → <a href="https://www.amazon.com.au/hz/privacy-central/data-requests/preview.html" target="_blank" rel="noopener">Request Your Data</a></strong> (Privacy Central)</li>
+      <li>Choose <strong>"Your Orders"</strong> from the dropdown → <strong>Submit Request</strong></li>
+      <li>Confirm via the email Amazon sends, then wait (usually a few hours)</li>
+      <li>Download &amp; unzip the archive; find <strong>Retail.OrderHistory.1.csv</strong></li>
+      <li>Upload that CSV below</li>
     </ol>
-    <p>Re-uploading the same CSV is safe — already-imported order lines are silently skipped.</p>
+    <p>Amazon retired the old one-click "Order History Reports" page, so this data request is now the official route. Re-uploading the same CSV is safe — already-imported order lines are silently skipped.</p>
     <form method="post" action="/api/amazon/import" enctype="multipart/form-data">
       <div class="upload-row">
         <input type="file" name="file" accept=".csv,text/csv" required>

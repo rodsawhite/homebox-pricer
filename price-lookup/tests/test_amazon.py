@@ -15,44 +15,58 @@ from app.amazon import match_score, match_orders_to_items, parse_amazon_csv
 # CSV parsing
 # ---------------------------------------------------------------------------
 
-_OHR_CSV = """\
-"Order ID","Order Date","Title","Category","ASIN/ISBN","Quantity","Unit Price","Currency","Seller"
-"123-4567890-1234567","2024-03-15","Sony WH-1000XM5 Wireless Headphones","Electronics","B09XS7JWHH","1","399.00","AUD","Amazon AU"
-"123-4567890-9999999","2024-01-10","Breville BRC460 Rice Cooker","Kitchen","B00ABC123","1","129.95","AUD","The Good Guys"
-"""
-
+# Current official "Request My Data" export: Retail.OrderHistory.1.csv.
+# Real column set (subset) — note "Product Name" (not "Title"), ISO dates with
+# Z, an "Order Status" column, and no "Seller" column.
 _RMD_CSV = """\
-Order ID,Order Date,Title,Category,ASIN/ISBN,Quantity,Unit Price,Currency,Seller,Shipment Date,Shipping Charge
-123-0000001-0000001,2023-11-20,TP-Link TL-SG108S-M2 2.5G Switch,Electronics,B0CXXX123,1,89.00,AUD,Amazon AU,2023-11-22,0.00
+"Website","Order ID","Order Date","Currency","Unit Price","Total Owed","ASIN","Quantity","Order Status","Product Name"
+"Amazon.com.au","123-4567890-1234567","2024-03-15T10:23:45Z","AUD","399.00","399.00","B09XS7JWHH","1","Shipped","Sony WH-1000XM5 Wireless Headphones"
+"Amazon.com.au","123-4567890-9999999","2024-01-10T08:00:00Z","AUD","129.95","129.95","B00ABC123","1","Shipped","Breville BRC460 Rice Cooker"
+"Amazon.com.au","123-0000000-0000000","2024-02-01T00:00:00Z","AUD","49.00","49.00","B0CANCEL00","1","Cancelled","Cancelled Item Should Be Skipped"
+"""
+
+# Legacy / third-party exporter format: Title, ASIN/ISBN, Seller columns.
+_LEGACY_CSV = """\
+Order ID,Order Date,Title,Category,ASIN/ISBN,Quantity,Unit Price,Currency,Seller
+123-0000001-0000001,2023-11-20,TP-Link TL-SG108S-M2 2.5G Switch,Electronics,B0CXXX123,1,89.00,AUD,Amazon AU
 """
 
 
-def test_parse_ohr_csv():
-    orders = parse_amazon_csv(_OHR_CSV)
+def test_parse_rmd_csv():
+    orders = parse_amazon_csv(_RMD_CSV)
+    # Cancelled order is dropped → 2 not 3.
     assert len(orders) == 2
     assert orders[0]["order_id"] == "123-4567890-1234567"
     assert orders[0]["title"] == "Sony WH-1000XM5 Wireless Headphones"
     assert orders[0]["unit_price"] == 399.0
     assert orders[0]["currency"] == "AUD"
-    assert orders[0]["order_date"] == "2024-03-15"
+    assert orders[0]["order_date"] == "2024-03-15"  # ISO Z stripped
     assert orders[0]["asin"] == "B09XS7JWHH"
+    assert orders[0]["seller"] == "Amazon"  # no seller column → default
+
+
+def test_parse_rmd_skips_cancelled():
+    orders = parse_amazon_csv(_RMD_CSV)
+    titles = [o["title"] for o in orders]
+    assert "Cancelled Item Should Be Skipped" not in titles
+
+
+def test_parse_legacy_csv():
+    orders = parse_amazon_csv(_LEGACY_CSV)
+    assert len(orders) == 1
+    assert orders[0]["order_id"] == "123-0000001-0000001"
+    assert orders[0]["title"] == "TP-Link TL-SG108S-M2 2.5G Switch"
+    assert orders[0]["unit_price"] == 89.0
     assert orders[0]["seller"] == "Amazon AU"
 
 
-def test_parse_rmd_csv():
-    orders = parse_amazon_csv(_RMD_CSV)
-    assert len(orders) == 1
-    assert orders[0]["order_id"] == "123-0000001-0000001"
-    assert orders[0]["unit_price"] == 89.0
-
-
 def test_parse_csv_bytes():
-    orders = parse_amazon_csv(_OHR_CSV.encode("utf-8"))
+    orders = parse_amazon_csv(_RMD_CSV.encode("utf-8"))
     assert len(orders) == 2
 
 
 def test_parse_csv_utf8_bom():
-    orders = parse_amazon_csv(b"\xef\xbb\xbf" + _OHR_CSV.encode("utf-8"))
+    orders = parse_amazon_csv(b"\xef\xbb\xbf" + _RMD_CSV.encode("utf-8"))
     assert len(orders) == 2
 
 
@@ -67,7 +81,7 @@ def test_parse_csv_empty_body():
 
 
 def test_parse_price_with_commas():
-    csv = _OHR_CSV.replace("399.00", "1,399.00")
+    csv = _RMD_CSV.replace("399.00", "1,399.00")
     orders = parse_amazon_csv(csv)
     assert orders[0]["unit_price"] == 1399.0
 
@@ -141,7 +155,7 @@ def test_amazon_import_csv(client):
         ]
         resp = client.post(
             "/api/amazon/import",
-            files={"file": ("orders.csv", _OHR_CSV.encode(), "text/csv")},
+            files={"file": ("orders.csv", _RMD_CSV.encode(), "text/csv")},
             headers={"accept": "application/json"},
         )
     assert resp.status_code == 200
@@ -155,13 +169,13 @@ def test_amazon_import_deduplicates(client):
         mock_hb.return_value.list_items.return_value = []
         client.post(
             "/api/amazon/import",
-            files={"file": ("orders.csv", _OHR_CSV.encode(), "text/csv")},
+            files={"file": ("orders.csv", _RMD_CSV.encode(), "text/csv")},
             headers={"accept": "application/json"},
         )
         # Re-upload same CSV
         resp = client.post(
             "/api/amazon/import",
-            files={"file": ("orders.csv", _OHR_CSV.encode(), "text/csv")},
+            files={"file": ("orders.csv", _RMD_CSV.encode(), "text/csv")},
             headers={"accept": "application/json"},
         )
     assert resp.json()["inserted"] == 0
