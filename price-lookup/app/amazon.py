@@ -37,24 +37,28 @@ _COLUMN_MAP = {
     "order date":               "order_date",
     "date":                     "order_date",
     # --- product title (Request-My-Data: "Product Name"; legacy: "Title";
-    #     azad: "description") ---
+    #     azad Items: "description"; azad Orders: "items") ---
     "product name":             "title",
     "title":                    "title",
     "description":              "title",
     "item name":                "title",
     "name":                     "title",
+    "items":                    "title",
     # --- product id ---
     "asin":                     "asin",
     "asin/isbn":                "asin",
     # --- quantity ---
     "quantity":                 "quantity",
     "qty":                      "quantity",
-    # --- price (azad uses "price"; some exporters "item total"/"amount") ---
+    # --- price (azad Items: "price"; azad Orders: "total" — note the Orders
+    #     report's total is the whole-order amount, not per-item) ---
     "unit price":               "unit_price",
     "purchase price per unit":  "unit_price",
     "price":                    "unit_price",
     "item total":               "unit_price",
     "amount":                   "unit_price",
+    "total":                    "unit_price",
+    "order total":              "unit_price",
     "total owed":               "total_owed",
     "currency":                 "currency",
     # --- seller (Request-My-Data has no seller column) ---
@@ -71,14 +75,16 @@ def _normalise_header(raw: str) -> str:
 
 
 def _parse_price(raw: str | None) -> float | None:
+    """Parse a monetary value. Returns None for blanks, zero, or non-numeric
+    tokens like "1Audiblecredit" (digital orders) — only a clean number counts."""
     if not raw:
         return None
-    cleaned = re.sub(r"[^\d.]", "", raw.replace(",", ""))
-    try:
-        v = float(cleaned)
-        return v if v > 0 else None
-    except ValueError:
+    cleaned = raw.replace("$", "").replace(",", "").strip()
+    # Reject anything that isn't purely a number (drops "1 Audible credit" etc.)
+    if not re.fullmatch(r"\d+(\.\d+)?", cleaned):
         return None
+    v = float(cleaned)
+    return v if v > 0 else None
 
 
 def _parse_date(raw: str | None) -> str | None:
@@ -142,7 +148,11 @@ def parse_amazon_csv(content: bytes | str) -> list[dict[str, Any]]:
         order_id = mapped_row.get("order_id")
         title = mapped_row.get("title")
         order_date = _parse_date(mapped_row.get("order_date"))
+        # Skip a repeated header row (some exporters append the header again at
+        # the end of the file) and any row missing the essentials.
         if not order_id or not title or not order_date:
+            continue
+        if order_id.strip().lower() == "order id":
             continue
 
         # Prefer the per-unit price; fall back to "Total Owed" if that's all
@@ -153,8 +163,11 @@ def parse_amazon_csv(content: bytes | str) -> list[dict[str, Any]]:
 
         orders.append({
             "order_id":   order_id,
+            # Default ASIN to "" (not None): SQLite treats NULLs as distinct in
+            # the UNIQUE(order_id, asin) index, which would break dedup on
+            # exports that omit ASIN (e.g. azad's Orders report).
+            "asin":       mapped_row.get("asin") or "",
             "order_date": order_date,
-            "asin":       mapped_row.get("asin"),
             "title":      title,
             "quantity":   int(mapped_row.get("quantity") or 1),
             "unit_price": unit_price,
