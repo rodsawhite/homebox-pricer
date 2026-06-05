@@ -187,10 +187,20 @@
           </form>
         </div>
 
-        {# Re-lookup: re-fetch item from Homebox and run a fresh price search #}
+        {# Search with an editable query (verbatim, no Homebox round-trip) #}
+        <form method="post" action="/api/candidates/{{ c.id }}/relookup">
+          <div class="edit-row">
+            <input type="text" name="query" value="{{ c.query | e }}"
+              placeholder="Search text" style="flex:1">
+            <button type="submit" class="btn"
+              style="background:#0d6efd;color:#fff;font-size:0.8rem">🔍 Search</button>
+          </div>
+        </form>
+
+        {# Re-fetch item metadata from Homebox, then rebuild the query + search #}
         <form method="post" action="/api/candidates/{{ c.id }}/relookup">
           <button type="submit" class="btn" style="width:100%;background:#6c757d;color:#fff;font-size:0.8rem">
-            ↻ Re-lookup from Homebox
+            ↻ Re-fetch from Homebox
           </button>
         </form>
 

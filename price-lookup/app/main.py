@@ -202,10 +202,17 @@ def api_reject(candidate_id: int, request: Request) -> Any:
 
 
 @app.post("/api/candidates/{candidate_id}/relookup")
-def api_relookup(candidate_id: int, request: Request) -> Any:
-    """Re-fetch the item from Homebox, rebuild the search query from current
-    metadata, run a fresh price lookup, and update the candidate in the DB.
-    Useful when the item's name, manufacturer, or model has been edited.
+def api_relookup(
+    candidate_id: int,
+    request: Request,
+    query: str | None = Form(None),
+) -> Any:
+    """Run a fresh price lookup and update the candidate in the DB.
+
+    If a ``query`` form field is supplied (the editable search box in the queue),
+    that text is used verbatim — handy when Homebox metadata is messy. Otherwise
+    the item is re-fetched from Homebox and the query is rebuilt from its current
+    name / manufacturer / model.
     """
     row = get_candidate(candidate_id)
     if not row:
@@ -219,24 +226,29 @@ def api_relookup(candidate_id: int, request: Request) -> Any:
             )
         raise HTTPException(400, f"Candidate is already {row['status']}")
 
-    try:
-        item = HomeboxClient().get_item(row["homebox_id"])
-    except HomeboxError as exc:
-        if _wants_html(request):
-            return RedirectResponse(
-                f"/?flash=Homebox+error:+{exc}&flash_type=err", status_code=303
-            )
-        raise HTTPException(502, f"Homebox error: {exc}") from exc
-
     settings = get_settings()
-    name = item.get("name", "") or row["item_name"]
-    query = build_search_query(item, settings.price_currency)
+    custom = (query or "").strip()
+    if custom:
+        # Use the edited query verbatim — no Homebox round-trip.
+        name = row["item_name"]
+        search_query = custom
+    else:
+        try:
+            item = HomeboxClient().get_item(row["homebox_id"])
+        except HomeboxError as exc:
+            if _wants_html(request):
+                return RedirectResponse(
+                    f"/?flash=Homebox+error:+{exc}&flash_type=err", status_code=303
+                )
+            raise HTTPException(502, f"Homebox error: {exc}") from exc
+        name = item.get("name", "") or row["item_name"]
+        search_query = build_search_query(item, settings.price_currency)
 
-    result = lookup_price(query)
+    result = lookup_price(search_query)
     refresh_candidate(
         candidate_id=candidate_id,
         item_name=name,
-        query=query,
+        query=search_query,
         price=result["price"],
         currency=result.get("currency", settings.price_currency),
         source_url=result["source_url"],

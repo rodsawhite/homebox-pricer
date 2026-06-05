@@ -177,6 +177,72 @@ def test_lookup_empty_query(client):
 
 
 # ---------------------------------------------------------------------------
+# Re-lookup: editable custom query vs Homebox re-fetch
+# ---------------------------------------------------------------------------
+
+def test_relookup_with_custom_query_skips_homebox(client):
+    """A supplied query is used verbatim — no Homebox round-trip."""
+    from app import db
+    db.upsert_candidate(
+        homebox_id="hb-rl1", item_name="TP-Link Switch",
+        query="Unilnik TP-Link TL-SG108S-M2 price AUD",
+        price=None, currency="AUD", source_url=None, confidence="low", reason="r",
+    )
+    cid = db.list_candidates(status="pending")[0]["id"]
+
+    fake_result = {"price": 89.0, "currency": "AUD",
+                   "source_url": "https://www.staticice.com.au/x",
+                   "confidence": "high", "reason": "ok"}
+    with (
+        patch("app.main.lookup_price", return_value=fake_result) as mock_lp,
+        patch("app.main.HomeboxClient") as mock_hb,
+    ):
+        resp = client.post(
+            f"/api/candidates/{cid}/relookup",
+            data={"query": "TP-Link TL-SG108S-M2 2.5G Switch price AUD"},
+            headers={"accept": "application/json"},
+        )
+
+    assert resp.status_code == 200
+    # The custom query was used verbatim; Homebox was never contacted.
+    mock_lp.assert_called_once_with("TP-Link TL-SG108S-M2 2.5G Switch price AUD")
+    mock_hb.assert_not_called()
+    updated = db.get_candidate(cid)
+    assert updated["query"] == "TP-Link TL-SG108S-M2 2.5G Switch price AUD"
+    assert updated["price"] == 89.0
+
+
+def test_relookup_without_query_refetches_homebox(client):
+    """No query field → re-fetch the item and rebuild the query from metadata."""
+    from app import db
+    db.upsert_candidate(
+        homebox_id="hb-rl2", item_name="Old Name", query="old query",
+        price=None, currency="AUD", source_url=None, confidence="low", reason="r",
+    )
+    cid = db.list_candidates(status="pending")[0]["id"]
+
+    item = {"name": "Sony WH-1000XM5", "manufacturer": "Sony", "modelNumber": ""}
+    fake_result = {"price": 549.0, "currency": "AUD", "source_url": None,
+                   "confidence": "high", "reason": "ok"}
+    with (
+        patch("app.main.lookup_price", return_value=fake_result) as mock_lp,
+        patch("app.main.HomeboxClient") as mock_hb,
+    ):
+        mock_hb.return_value.get_item.return_value = item
+        resp = client.post(
+            f"/api/candidates/{cid}/relookup",
+            headers={"accept": "application/json"},
+        )
+
+    assert resp.status_code == 200
+    mock_hb.return_value.get_item.assert_called_once_with("hb-rl2")
+    # Rebuilt from live metadata (manufacturer dedup applies elsewhere).
+    mock_lp.assert_called_once_with("Sony WH-1000XM5 price AUD")
+    updated = db.get_candidate(cid)
+    assert updated["item_name"] == "Sony WH-1000XM5"
+
+
+# ---------------------------------------------------------------------------
 # Confidence pre-filter (queue page + API escape hatch)
 # ---------------------------------------------------------------------------
 
