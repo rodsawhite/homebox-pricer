@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     price_currency: str = "AUD"
     price_min_confidence: str = "low"
     check_interval: int = 3600
+    # Use staticICE.com.au (AU price-comparison aggregator) as the primary
+    # price source. When it returns AU listings the local model is skipped
+    # entirely; otherwise the lookup falls through to DDG + Ollama.
+    price_use_staticice: bool = True
     # How many top search-result pages to fetch and scrape structured price
     # data (JSON-LD / og:price) from. 0 disables page fetching (snippets only).
     price_fetch_pages: int = 3
