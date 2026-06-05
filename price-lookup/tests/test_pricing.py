@@ -6,9 +6,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import httpx
+
 from app.pricing import (
     _coerce_confidence,
     _coerce_price,
+    _extract_structured_price,
     _format_results,
     _null_result,
     _parse_model_output,
@@ -143,6 +146,8 @@ def test_lookup_price_happy_path():
     with (
         patch("app.pricing.DDGS") as mock_ddgs,
         patch("app.pricing.httpx.post") as mock_post,
+        # Skip page scraping by failing the fetch — model result stands.
+        patch("app.pricing.httpx.get", side_effect=httpx.ConnectError("no net")),
         patch("app.pricing.time.sleep"),
     ):
         # DDG mock
@@ -200,12 +205,94 @@ def test_lookup_price_no_results_returns_null():
     assert "no search results" in result["reason"]
 
 
+# ---------------------------------------------------------------------------
+# _extract_structured_price — JSON-LD and meta tags
+# ---------------------------------------------------------------------------
+
+def test_extract_price_from_jsonld():
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@type": "Product", "name": "Rice Cooker",
+     "offers": {"@type": "Offer", "price": "129.00", "priceCurrency": "AUD"}}
+    </script></head></html>
+    """
+    price, currency = _extract_structured_price(html)
+    assert price == 129.0
+    assert currency == "AUD"
+
+
+def test_extract_price_from_jsonld_graph_and_list_offers():
+    html = """
+    <script type="application/ld+json">
+    {"@graph": [{"@type": "Product",
+      "offers": [{"@type": "Offer", "price": 89.95, "priceCurrency": "AUD"}]}]}
+    </script>
+    """
+    price, currency = _extract_structured_price(html)
+    assert price == 89.95
+    assert currency == "AUD"
+
+
+def test_extract_price_from_og_meta():
+    html = '<meta property="og:price:amount" content="1,299.00">' \
+           '<meta property="og:price:currency" content="AUD">'
+    price, currency = _extract_structured_price(html)
+    assert price == 1299.0
+    assert currency == "AUD"
+
+
+def test_extract_price_none_when_absent():
+    price, currency = _extract_structured_price("<html><body>no price here</body></html>")
+    assert price is None
+    assert currency is None
+
+
+def test_lookup_price_scrape_fallback_when_model_null():
+    """Model returns null, but a page scrape yields an AU price — use it."""
+    html = ('<script type="application/ld+json">'
+            '{"@type":"Product","offers":{"price":"467.96","priceCurrency":"AUD"}}'
+            '</script>')
+    null_ollama = {"response": '{"price": null, "currency": "AUD", "source": "", "confidence": "low", "reason": "none"}'}
+    with (
+        patch("app.pricing.DDGS") as mock_ddgs,
+        patch("app.pricing.httpx.post") as mock_post,
+        patch("app.pricing.httpx.get") as mock_get,
+        patch("app.pricing.time.sleep"),
+    ):
+        ctx = MagicMock()
+        ctx.__enter__ = MagicMock(return_value=ctx)
+        ctx.__exit__ = MagicMock(return_value=False)
+        ctx.text.return_value = [
+            {"title": "Rice Cooker", "body": "no price in snippet",
+             "href": "https://www.house.com.au/products/rice-cooker"},
+        ]
+        mock_ddgs.return_value = ctx
+
+        post_resp = MagicMock()
+        post_resp.json.return_value = null_ollama
+        post_resp.raise_for_status = MagicMock()
+        mock_post.return_value = post_resp
+
+        get_resp = MagicMock()
+        get_resp.text = html
+        get_resp.raise_for_status = MagicMock()
+        mock_get.return_value = get_resp
+
+        result = lookup_price("Breville Rice Master")
+
+    assert result["price"] == 467.96
+    assert result["currency"] == "AUD"
+    assert "house.com.au" in result["source_url"]
+
+
 def test_lookup_price_ollama_down_returns_null():
     import httpx as _httpx
 
     with (
         patch("app.pricing.DDGS") as mock_ddgs,
         patch("app.pricing.httpx.post", side_effect=_httpx.ConnectError("refused")),
+        patch("app.pricing.httpx.get", side_effect=_httpx.ConnectError("no net")),
         patch("app.pricing.time.sleep"),
     ):
         ctx = MagicMock()
