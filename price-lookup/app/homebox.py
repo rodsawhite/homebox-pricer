@@ -229,64 +229,40 @@ class HomeboxClient:
 def _build_put_payload(item: dict) -> dict:
     """Convert a GET ItemOut response to a PUT ItemUpdate-compatible payload.
 
-    Homebox's GET response (ItemOut) contains read-only fields like
-    'attachments' and nested objects (location, labels, parent) that the
-    PUT endpoint (ItemUpdate) does not accept — sending them back causes 500.
-    This function projects only the writable scalar fields and maps nested
-    objects to their flat ID equivalents that ItemUpdate expects.
+    Mirrors the field set used by Homebox Companion's update_item (tools.py),
+    which is the reference working client. Companion omits warranty/sold/date
+    fields entirely rather than echoing them as null, which avoids any schema
+    mismatch on those fields.
+
+    Nested edges (location, tags/labels, parent) are flattened to IDs.
+    Both tagIds and labelIds are sent so the payload works across the v0.23
+    rename (each version ignores the key it doesn't recognise).
     """
-    # location and tags/labels come back as objects; PUT wants their IDs only.
-    # Homebox v0.23+ renamed "labels" → "tags" (and labelIds → tagIds on PUT);
-    # read whichever the server returned so tags survive a read-modify-write.
     loc = item.get("location") or {}
     tags = item.get("tags") or item.get("labels") or []
     tag_ids = [t["id"] for t in tags if t.get("id")]
     parent = item.get("parent") or {}
 
-    def _date(value: Any) -> Any:
-        # Homebox returns unset dates as the zero year; send null instead so
-        # the PUT validator doesn't choke. Real dates pass through untouched.
-        if not value or str(value).startswith("0001-01-01"):
-            return None
-        return value
-
-    return {
+    payload: dict = {
         "id": item.get("id", ""),
         "name": item.get("name", ""),
         "description": item.get("description", ""),
-        "assetId": item.get("assetId", "0"),
+        "assetId": item.get("assetId", ""),
         "quantity": item.get("quantity", 1),
         "insured": item.get("insured", False),
         "archived": item.get("archived", False),
-        "syncChildItemsLocations": item.get("syncChildItemsLocations", False),
-        # Nested → flat IDs. Empty UUIDs must be null, not "" — an empty
-        # string fails Homebox's UUID parse and triggers a generic 500.
+        "notes": item.get("notes", ""),
+        "manufacturer": item.get("manufacturer", ""),
+        "modelNumber": item.get("modelNumber", ""),
+        "serialNumber": item.get("serialNumber", ""),
+        "purchaseFrom": item.get("purchaseFrom", ""),
+        # v0.25.0: plain float64, no json:",string" tag — must be a number.
+        "purchasePrice": item.get("purchasePrice") or 0,
+        # Nested → flat IDs.
         "locationId": loc.get("id") or None,
-        # Send both keys: newer Homebox reads "tagIds", older reads "labelIds";
-        # each ignores the other, so this is safe across versions.
+        # Send both keys for cross-version safety (v0.23+ uses tagIds, older uses labelIds).
         "tagIds": tag_ids,
         "labelIds": tag_ids,
         "parentId": parent.get("id") or None,
-        # Identifications
-        "serialNumber": item.get("serialNumber", ""),
-        "modelNumber": item.get("modelNumber", ""),
-        "manufacturer": item.get("manufacturer", ""),
-        # Warranty
-        "lifetimeWarranty": item.get("lifetimeWarranty", False),
-        "warrantyExpires": _date(item.get("warrantyExpires")),
-        "warrantyDetails": item.get("warrantyDetails", ""),
-        # Purchase
-        "purchaseTime": _date(item.get("purchaseTime")),
-        "purchaseFrom": item.get("purchaseFrom", ""),
-        # v0.25.0 ItemUpdate.PurchasePrice is a plain float64 (no json:",string"
-        # tag) — send a number. Sending a string fails the decoder → 500.
-        "purchasePrice": item.get("purchasePrice") or 0,
-        # Sold
-        "soldTime": _date(item.get("soldTime")),
-        "soldTo": item.get("soldTo", ""),
-        "soldPrice": item.get("soldPrice") or 0,
-        "soldNotes": item.get("soldNotes", ""),
-        # Extras
-        "notes": item.get("notes", ""),
-        "fields": item.get("fields", []),
     }
+    return payload
