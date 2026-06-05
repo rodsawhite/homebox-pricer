@@ -13,7 +13,9 @@ from __future__ import annotations
 import json
 import logging
 import re
+import statistics
 import time
+from urllib.parse import quote_plus, urljoin
 from typing import Any
 
 import httpx
@@ -175,6 +177,120 @@ def _scrape_prices(hits: list[dict[str, Any]], limit: int, timeout: float) -> No
             logger.info("Scraped price %s %s from %s", currency or "", price, url)
 
 
+# --- staticICE: AU price-comparison aggregator ------------------------------
+#
+# staticICE.com.au indexes *only* Australian retailers and renders real prices
+# in plain server-side HTML (no JS, no auth). For the common case — electronics,
+# appliances, home goods — it gives a deterministic, AUD-denominated market
+# price with zero LLM involvement. When it returns nothing (niche items,
+# furniture, books) we fall through to the DDG + Ollama path below.
+#
+# The build sandbox can't reach the host, so the parser is markup-agnostic: it
+# anchors on the price token ("$N.NN") and reads a stripped-tag window around it
+# as the listing description, rather than depending on exact table/anchor
+# structure that staticICE may change. A relevance filter (query-token overlap)
+# drops nav/ad noise, and the median across matching listings resists outliers.
+
+_STATICICE_HOST = "https://www.staticice.com.au"
+_STATICICE_SEARCH = _STATICICE_HOST + "/cgi-bin/search.cgi"
+
+_SI_PRICE_RE = re.compile(r"\$\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)")
+_TAG_RE = re.compile(r"<[^>]+>")
+_HREF_RE = re.compile(r'href=["\']([^"\']+)["\']', re.IGNORECASE)
+
+
+def _strip_tags(html: str) -> str:
+    return re.sub(r"\s+", " ", _TAG_RE.sub(" ", html)).strip()
+
+
+def _significant_tokens(text: str) -> set[str]:
+    """Lowercased alphanumeric tokens of length >= 4 (model numbers survive)."""
+    return {t for t in re.findall(r"[a-z0-9]+", text.lower()) if len(t) >= 4}
+
+
+def _parse_staticice(html: str) -> list[dict[str, Any]]:
+    """Extract {price, description, url} listings from a staticICE results page.
+
+    Markup-agnostic: staticICE lists each result as a ``$price`` followed by the
+    product description and a retailer redirect link. We segment on the price
+    tokens — each listing's description is the stripped text *between* its price
+    and the next price — so neighbouring listings never bleed into one another.
+    """
+    matches = list(_SI_PRICE_RE.finditer(html))
+    listings: list[dict[str, Any]] = []
+    for i, m in enumerate(matches):
+        price = _coerce_price(m.group(1).replace(",", ""))
+        # Ignore sub-dollar noise and absurd values (page furniture, ads).
+        if price is None or price < 1 or price > 1_000_000:
+            continue
+        seg_end = matches[i + 1].start() if i + 1 < len(matches) else m.end() + 300
+        segment = html[m.end(): seg_end]
+        desc = _strip_tags(segment)[:200]
+        href = _HREF_RE.search(segment)
+        url = urljoin(_STATICICE_HOST, href.group(1)) if href else ""
+        listings.append({"price": price, "description": desc, "url": url})
+    return listings
+
+
+def _staticice_search(query: str, timeout: float) -> list[dict[str, Any]]:
+    url = f"{_STATICICE_SEARCH}?q={quote_plus(query)}&spos=3"
+    resp = httpx.get(
+        url, timeout=timeout, follow_redirects=True,
+        headers={"User-Agent": "Mozilla/5.0 (homebox-pricer)"},
+    )
+    resp.raise_for_status()
+    return _parse_staticice(resp.text)
+
+
+def _staticice_lookup(query: str, timeout: float) -> dict[str, Any] | None:
+    """Primary price source. Returns a result dict, or None to fall through."""
+    try:
+        listings = _staticice_search(query, timeout)
+    except httpx.HTTPError as exc:
+        logger.warning("staticICE search failed for %r: %s", query, exc)
+        return None
+    except Exception as exc:  # never let a parser bug break the lookup
+        logger.warning("staticICE parse error for %r: %s — falling back", query, exc)
+        return None
+
+    if not listings:
+        return None
+
+    # Score each listing by how many significant query tokens its description
+    # contains, then keep the best-matching cluster. Requiring at least half of
+    # the strongest match's overlap drops accessories/wrong products (a "$19.95
+    # charging cable for headphones" matches one token; the real item matches
+    # several) while tolerating wording differences between genuine listings.
+    q_tokens = _significant_tokens(query)
+    if q_tokens:
+        scored = [(len(q_tokens & _significant_tokens(l["description"])), l) for l in listings]
+        best = max(score for score, _ in scored)
+        if best > 0:
+            threshold = max(1, (best + 1) // 2)
+            relevant = [l for score, l in scored if score >= threshold]
+        else:
+            relevant = listings
+    else:
+        relevant = listings
+
+    prices = [l["price"] for l in relevant]
+    price = round(statistics.median(prices), 2)
+    # Source link: the listing closest to the median (most representative).
+    rep = min(relevant, key=lambda l: abs(l["price"] - price))
+    url = rep["url"] or f"{_STATICICE_SEARCH}?q={quote_plus(query)}"
+
+    # staticICE is AU-only, so the price is AUD by construction. More
+    # corroborating listings → higher confidence.
+    confidence = "high" if len(relevant) >= 3 else "medium"
+    return {
+        "price": price,
+        "currency": "AUD",
+        "source_url": url,
+        "confidence": confidence,
+        "reason": f"Median of {len(relevant)} AU listing(s) on staticICE",
+    }
+
+
 def _ollama_extract(prompt: str) -> dict[str, Any]:
     """Send prompt to Ollama and return parsed JSON. Never raises on bad JSON."""
     settings = get_settings()
@@ -282,12 +398,31 @@ def _null_result(reason: str) -> dict[str, Any]:
 
 
 def lookup_price(query: str) -> dict[str, Any]:
-    """Search DDG and extract a price. Suitable for /api/lookup and the sweep.
+    """Find a price for ``query``. Suitable for /api/lookup and the sweep.
+
+    Pipeline (each step falls through to the next if it yields no price):
+      1. staticICE.com.au — AU price-comparison aggregator, deterministic, no LLM.
+      2. DDG search → scrape JSON-LD/og:meta off the top pages → Ollama parse.
 
     Returns a dict with keys: price, currency, source_url, confidence, reason.
     Never raises — errors are captured in the returned dict.
     """
     settings = get_settings()
+
+    if settings.price_use_staticice:
+        si = _staticice_lookup(query, settings.price_fetch_timeout)
+        if si is not None and si["price"] is not None:
+            logger.info(
+                "Price result (staticICE) for %r: price=%s confidence=%s",
+                query, si["price"], si["confidence"],
+            )
+            return si
+
+    return _ddg_ollama_lookup(query, settings)
+
+
+def _ddg_ollama_lookup(query: str, settings: Any) -> dict[str, Any]:
+    """DDG search → page scrape → Ollama parse. The fallback price source."""
     ddg_query = query if settings.price_currency.upper() in query.upper() else (
         query + f" {settings.price_currency}"
     )

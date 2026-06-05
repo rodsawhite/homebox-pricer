@@ -54,10 +54,20 @@ Request/data flow, by module under `price-lookup/app/`:
   `/health` passes early) then repeats. Distinguishes `HomeboxAuthError`
   (pause gracefully, service stays up) from `HomeboxError` (abort sweep).
 - **`pricing.py`** — `lookup_price()` never raises; returns a null-price result
-  on any failure. DDG search (`ddgs`) with bounded exponential-backoff retry →
-  format snippets → Ollama `/api/generate` → `_parse_model_output()` tolerates
-  code fences / stray text. `_coerce_confidence()` downgrades to `low` when the
-  source shows no Australian signal (`.com.au`, `aud`, `a$`, `.au/`).
+  on any failure. Tiered pipeline, each step falling through to the next:
+  **(1) staticICE.com.au** (`_staticice_lookup()`) — an AU-only price-comparison
+  aggregator that renders real AUD prices in plain HTML. `_parse_staticice()`
+  is markup-agnostic (segments on `$price` tokens, reads the text between
+  prices as the description) so it degrades gracefully if staticICE changes its
+  layout. Listings are filtered by query-token overlap (drops accessories) and
+  the **median** price wins — no LLM involved. Toggle with
+  `PRICE_USE_STATICICE`. **(2) DDG + Ollama** (`_ddg_ollama_lookup()`) — the
+  fallback for items staticICE doesn't cover: DDG search (`ddgs`) with bounded
+  backoff → `_scrape_prices()` pulls JSON-LD/og:meta prices off the top
+  `PRICE_FETCH_PAGES` pages → Ollama `/api/generate` parses, with the best
+  scraped AU price as a deterministic fallback when the model returns null.
+  `_coerce_confidence()` downgrades to `low` when the source shows no
+  Australian signal (`.com.au`, `aud`, `a$`, `.au/`).
 - **`homebox.py`** — Homebox API client. Supports static token **or**
   user/password auto-refresh. `_retry_request()` retries only transient
   failures (transport errors, 5xx); 4xx including the 401-refresh handshake is

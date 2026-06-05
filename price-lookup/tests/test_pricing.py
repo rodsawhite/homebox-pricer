@@ -15,6 +15,8 @@ from app.pricing import (
     _format_results,
     _null_result,
     _parse_model_output,
+    _parse_staticice,
+    _staticice_lookup,
     lookup_price,
 )
 
@@ -144,6 +146,7 @@ _MOCK_OLLAMA_RESPONSE = {
 
 def test_lookup_price_happy_path():
     with (
+        patch("app.pricing._staticice_lookup", return_value=None),
         patch("app.pricing.DDGS") as mock_ddgs,
         patch("app.pricing.httpx.post") as mock_post,
         # Skip page scraping by failing the fetch — model result stands.
@@ -172,6 +175,7 @@ def test_lookup_price_happy_path():
 
 def test_lookup_price_ddg_failure_returns_null():
     with (
+        patch("app.pricing._staticice_lookup", return_value=None),
         patch("app.pricing.DDGS") as mock_ddgs,
         patch("app.pricing.time.sleep"),
     ):
@@ -190,6 +194,7 @@ def test_lookup_price_ddg_failure_returns_null():
 
 def test_lookup_price_no_results_returns_null():
     with (
+        patch("app.pricing._staticice_lookup", return_value=None),
         patch("app.pricing.DDGS") as mock_ddgs,
         patch("app.pricing.time.sleep"),
     ):
@@ -255,6 +260,7 @@ def test_lookup_price_scrape_fallback_when_model_null():
             '</script>')
     null_ollama = {"response": '{"price": null, "currency": "AUD", "source": "", "confidence": "low", "reason": "none"}'}
     with (
+        patch("app.pricing._staticice_lookup", return_value=None),
         patch("app.pricing.DDGS") as mock_ddgs,
         patch("app.pricing.httpx.post") as mock_post,
         patch("app.pricing.httpx.get") as mock_get,
@@ -290,6 +296,7 @@ def test_lookup_price_ollama_down_returns_null():
     import httpx as _httpx
 
     with (
+        patch("app.pricing._staticice_lookup", return_value=None),
         patch("app.pricing.DDGS") as mock_ddgs,
         patch("app.pricing.httpx.post", side_effect=_httpx.ConnectError("refused")),
         patch("app.pricing.httpx.get", side_effect=_httpx.ConnectError("no net")),
@@ -305,3 +312,93 @@ def test_lookup_price_ollama_down_returns_null():
 
     assert result["price"] is None
     assert result["confidence"] == "low"
+
+
+# ---------------------------------------------------------------------------
+# staticICE parsing + lookup
+# ---------------------------------------------------------------------------
+
+# Representative staticICE results markup: several retailers, one price each,
+# plus an unrelated accessory and some page-chrome "$" noise.
+_STATICICE_HTML = """
+<html><body>
+<div class="banner">Compare prices and save $5 today!</div>
+<table>
+ <tr><td><a href="/cgi-bin/redirect.cgi?u=jbhifi">$549.00</a></td>
+     <td>Sony WH-1000XM5 Wireless Noise Cancelling Headphones - JB Hi-Fi</td></tr>
+ <tr><td><a href="/cgi-bin/redirect.cgi?u=harvey">$558.00</a></td>
+     <td>Sony WH1000XM5 Headphones Black - Harvey Norman</td></tr>
+ <tr><td><a href="/cgi-bin/redirect.cgi?u=bing">$539.00</a></td>
+     <td>Sony WH-1000XM5 Over Ear Headphones - Bing Lee</td></tr>
+ <tr><td><a href="/cgi-bin/redirect.cgi?u=cable">$19.95</a></td>
+     <td>Replacement USB-C charging cable for headphones</td></tr>
+</table>
+</body></html>
+"""
+
+
+def test_parse_staticice_extracts_listings():
+    listings = _parse_staticice(_STATICICE_HTML)
+    prices = {l["price"] for l in listings}
+    # The three headphone listings + the cable; banner "$5" is sub-dollar noise
+    # only if < 1 — $5 is >= 1 so it is captured, but lacks query tokens.
+    assert 549.0 in prices
+    assert 558.0 in prices
+    assert 539.0 in prices
+    # First listing carries an absolute retailer redirect URL.
+    first = next(l for l in listings if l["price"] == 549.0)
+    assert first["url"].startswith("https://www.staticice.com.au/")
+    assert "Sony" in first["description"]
+
+
+def test_staticice_lookup_medians_relevant_listings():
+    with patch("app.pricing.httpx.get") as mock_get:
+        resp = MagicMock()
+        resp.text = _STATICICE_HTML
+        resp.raise_for_status = MagicMock()
+        mock_get.return_value = resp
+
+        result = _staticice_lookup("Sony WH-1000XM5 headphones", timeout=8.0)
+
+    # Median of the three relevant headphone prices (539, 549, 558) = 549.0.
+    # The $19.95 cable and "$5" banner lack query tokens and are excluded.
+    assert result["price"] == 549.0
+    assert result["currency"] == "AUD"
+    assert result["confidence"] == "high"  # >= 3 corroborating listings
+    assert "staticice" in result["source_url"].lower()
+
+
+def test_staticice_lookup_returns_none_on_http_error():
+    with patch("app.pricing.httpx.get", side_effect=httpx.ConnectError("no net")):
+        assert _staticice_lookup("anything", timeout=8.0) is None
+
+
+def test_staticice_lookup_returns_none_when_empty():
+    with patch("app.pricing.httpx.get") as mock_get:
+        resp = MagicMock()
+        resp.text = "<html><body>no results found</body></html>"
+        resp.raise_for_status = MagicMock()
+        mock_get.return_value = resp
+        assert _staticice_lookup("obscure xyz", timeout=8.0) is None
+
+
+def test_lookup_price_uses_staticice_first_skipping_model():
+    """When staticICE yields a price, DDG and Ollama are never touched."""
+    with (
+        patch("app.pricing.httpx.get") as mock_get,
+        patch("app.pricing.DDGS") as mock_ddgs,
+        patch("app.pricing.httpx.post") as mock_post,
+        patch("app.pricing.time.sleep"),
+    ):
+        resp = MagicMock()
+        resp.text = _STATICICE_HTML
+        resp.raise_for_status = MagicMock()
+        mock_get.return_value = resp
+
+        result = lookup_price("Sony WH-1000XM5 headphones")
+
+    assert result["price"] == 549.0
+    assert result["confidence"] == "high"
+    # The model/search fallback must not have been invoked.
+    mock_ddgs.assert_not_called()
+    mock_post.assert_not_called()
