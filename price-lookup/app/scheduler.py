@@ -25,6 +25,25 @@ logger = logging.getLogger(__name__)
 _last_sweep: datetime | None = None
 
 
+def build_search_query(item: dict, currency: str) -> str:
+    """Build a DDG/staticICE search query from a Homebox item dict.
+
+    Deduplicates the manufacturer prefix when the item name already starts with
+    it (e.g. manufacturer='TP-Link', name='TP-Link TL-SG108' → no double prefix).
+    """
+    name = (item.get("name") or "").strip()
+    manufacturer = (item.get("manufacturer") or "").strip()
+    model = (item.get("modelNumber") or "").strip()
+
+    # Drop manufacturer if the name already leads with it (case-insensitive),
+    # to avoid redundant or garbled prefixes polluting the search query.
+    if manufacturer and name.lower().startswith(manufacturer.lower()):
+        manufacturer = ""
+
+    parts = [p for p in [manufacturer, name, model] if p]
+    return " ".join(parts) + f" price {currency}"
+
+
 def last_sweep() -> datetime | None:
     return _last_sweep
 
@@ -69,11 +88,7 @@ async def run_sweep() -> dict[str, int]:
             continue
 
         name = item.get("name", "")
-        manufacturer = (item.get("manufacturer") or "").strip()
-        model = (item.get("modelNumber") or "").strip()
-
-        parts = [p for p in [manufacturer, name, model] if p]
-        query = " ".join(parts) + f" price {settings.price_currency}"
+        query = build_search_query(item, settings.price_currency)
 
         result = lookup_price(query)
 
