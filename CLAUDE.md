@@ -61,8 +61,15 @@ Request/data flow, by module under `price-lookup/app/`:
   prices as the description) so it degrades gracefully if staticICE changes its
   layout. Listings are filtered by query-token overlap (drops accessories) and
   the **median** price wins — no LLM involved. Toggle with
-  `PRICE_USE_STATICICE`. **(2) DDG + Ollama** (`_ddg_ollama_lookup()`) — the
-  fallback for items staticICE doesn't cover: DDG search (`ddgs`) with bounded
+  `PRICE_USE_STATICICE`. **(2) PricesAPI.io** (`_pricesapi_lookup()`) — a paid
+  real-time product-search API (multi-retailer, `country=au`), enabled only when
+  `PRICES_API_KEY` is set. Confirmed shape: `data.products[]`, each with a
+  top-level `price`/`currency` plus an `offers[]` array; the parser collects all
+  prices for the best title match and takes the median. **Base host is
+  `api.pricesapi.io`** (the bare `pricesapi.io` is just the marketing site) and
+  calls take **~45s** (real-time scrape) — hence `PRICES_API_TIMEOUT` defaults
+  to 90s. **(3) DDG + Ollama** (`_ddg_ollama_lookup()`) — the
+  fallback for items the first two don't cover: DDG search (`ddgs`) with bounded
   backoff → `_scrape_prices()` pulls JSON-LD/og:meta prices off the top
   `PRICE_FETCH_PAGES` pages → Ollama `/api/generate` parses, with the best
   scraped AU price as a deterministic fallback when the model returns null.
