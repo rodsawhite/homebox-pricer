@@ -26,28 +26,43 @@ from typing import Any
 # ---------------------------------------------------------------------------
 
 # Maps normalised (lowercased, stripped) source headers → our canonical names.
-# Covers BOTH the current Retail.OrderHistory.1.csv export and the legacy
-# Order History Reports / third-party exporter column names.
+# Deliberately broad so it accepts all the common exporters without per-tool
+# config: Amazon's official Retail.OrderHistory.1.csv, the legacy Order History
+# Reports CSV, the azad extension ("Amazon Order History Reporter", which uses
+# `description`/`price`), and other browser exporters.
 _COLUMN_MAP = {
     # --- identifiers ---
     "order id":                 "order_id",
+    "order #":                  "order_id",
     "order date":               "order_date",
-    # --- product title (Request-My-Data uses "Product Name", legacy uses "Title") ---
+    "date":                     "order_date",
+    # --- product title (Request-My-Data: "Product Name"; legacy: "Title";
+    #     azad: "description") ---
     "product name":             "title",
     "title":                    "title",
+    "description":              "title",
+    "item name":                "title",
+    "name":                     "title",
     # --- product id ---
     "asin":                     "asin",
     "asin/isbn":                "asin",
-    # --- quantity / price ---
+    # --- quantity ---
     "quantity":                 "quantity",
+    "qty":                      "quantity",
+    # --- price (azad uses "price"; some exporters "item total"/"amount") ---
     "unit price":               "unit_price",
     "purchase price per unit":  "unit_price",
+    "price":                    "unit_price",
+    "item total":               "unit_price",
+    "amount":                   "unit_price",
     "total owed":               "total_owed",
     "currency":                 "currency",
-    # --- seller (legacy only; Request-My-Data has no seller column) ---
+    # --- seller (Request-My-Data has no seller column) ---
     "seller":                   "seller",
-    # --- status (Request-My-Data only; used to drop cancelled orders) ---
+    "sold by":                  "seller",
+    # --- status (used to drop cancelled orders when present) ---
     "order status":             "order_status",
+    "status":                   "order_status",
 }
 
 
