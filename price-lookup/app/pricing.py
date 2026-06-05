@@ -67,8 +67,112 @@ def _format_results(hits: list[dict[str, Any]]) -> str:
         title = h.get("title", "")
         body = h.get("body", "")
         url = h.get("href", "")
-        lines.append(f"{i}. {title}\n   {body}\n   {url}")
+        block = f"{i}. {title}\n   {body}\n   {url}"
+        # If we scraped a price off the actual page, surface it explicitly so
+        # the model isn't guessing from a snippet that may omit the price.
+        scraped = h.get("scraped_price")
+        if scraped is not None:
+            cur = h.get("scraped_currency") or ""
+            block += f"\n   PAGE PRICE: {cur} {scraped}".rstrip()
+        lines.append(block)
     return "\n\n".join(lines)
+
+
+# --- Structured price scraping ---------------------------------------------
+#
+# E-commerce pages embed the price in machine-readable form far more reliably
+# than DDG puts it in a snippet. We read it from JSON-LD (schema.org Offer) and
+# Open Graph / product meta tags using only stdlib regex+json (no HTML parser
+# dependency). This is deterministic; the LLM becomes a fallback, not the sole
+# extractor.
+
+_JSONLD_RE = re.compile(
+    r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+    re.DOTALL | re.IGNORECASE,
+)
+_META_PRICE_RE = re.compile(
+    r'<meta[^>]+(?:property|name|itemprop)=["\']'
+    r'(?:og:price:amount|product:price:amount|price)["\']'
+    r'[^>]*content=["\']([0-9][0-9,\.]*)["\']',
+    re.IGNORECASE,
+)
+_META_CURRENCY_RE = re.compile(
+    r'<meta[^>]+(?:property|name|itemprop)=["\']'
+    r'(?:og:price:currency|product:price:currency|priceCurrency)["\']'
+    r'[^>]*content=["\']([A-Za-z]{3})["\']',
+    re.IGNORECASE,
+)
+
+
+def _price_from_jsonld(html: str) -> tuple[float | None, str | None]:
+    """Pull the first schema.org Offer price/currency from JSON-LD blocks."""
+    for block in _JSONLD_RE.findall(html):
+        try:
+            data = json.loads(block.strip())
+        except json.JSONDecodeError:
+            continue
+        for node in _iter_nodes(data):
+            if not isinstance(node, dict):
+                continue
+            offers = node.get("offers")
+            for offer in _iter_nodes(offers):
+                if not isinstance(offer, dict):
+                    continue
+                price = offer.get("price") or offer.get("lowPrice")
+                if price is not None:
+                    return _coerce_price(price), offer.get("priceCurrency")
+    return None, None
+
+
+def _iter_nodes(data: Any) -> list[Any]:
+    """Flatten JSON-LD that may be a dict, a list, or use an @graph wrapper."""
+    if data is None:
+        return []
+    if isinstance(data, list):
+        out: list[Any] = []
+        for d in data:
+            out.extend(_iter_nodes(d))
+        return out
+    if isinstance(data, dict) and isinstance(data.get("@graph"), list):
+        return _iter_nodes(data["@graph"])
+    return [data]
+
+
+def _extract_structured_price(html: str) -> tuple[float | None, str | None]:
+    """Best-effort price+currency from a product page. Returns (None, None)."""
+    price, currency = _price_from_jsonld(html)
+    if price is not None:
+        return price, currency
+    m = _META_PRICE_RE.search(html)
+    if m:
+        price = _coerce_price(m.group(1).replace(",", ""))
+        cur_m = _META_CURRENCY_RE.search(html)
+        return price, (cur_m.group(1) if cur_m else None)
+    return None, None
+
+
+def _scrape_prices(hits: list[dict[str, Any]], limit: int, timeout: float) -> None:
+    """Fetch the top ``limit`` result pages and annotate hits in-place with
+    scraped_price / scraped_currency. Failures are swallowed per-page so a
+    dead link never breaks the lookup."""
+    for h in hits[:limit]:
+        url = h.get("href", "")
+        if not url:
+            continue
+        try:
+            resp = httpx.get(
+                url, timeout=timeout, follow_redirects=True,
+                headers={"User-Agent": "Mozilla/5.0 (homebox-pricer)"},
+            )
+            resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            logger.debug("Page fetch failed for %s: %s", url, exc)
+            continue
+        price, currency = _extract_structured_price(resp.text)
+        if price is not None:
+            h["scraped_price"] = price
+            h["scraped_currency"] = currency
+            logger.info("Scraped price %s %s from %s", currency or "", price, url)
 
 
 def _ollama_extract(prompt: str) -> dict[str, Any]:
@@ -199,9 +303,31 @@ def lookup_price(query: str) -> dict[str, Any]:
         logger.info("No DDG results for %r", query)
         return _null_result("no search results")
 
+    # Scrape structured prices off the top result pages so the model sees real
+    # prices, not just snippets that often omit them.
+    if settings.price_fetch_pages > 0:
+        try:
+            _scrape_prices(hits, settings.price_fetch_pages, settings.price_fetch_timeout)
+        except Exception as exc:  # never let scraping break a lookup
+            logger.warning("Price scraping error (continuing): %s", exc)
+
     formatted = _format_results(hits)
     prompt = _PROMPT.format(query=query, results=formatted)
     result = _ollama_extract(prompt)
+
+    # Deterministic fallback: if the model found nothing but we scraped a price
+    # off a page, use the best scraped AU price rather than returning null.
+    if result["price"] is None:
+        fallback = _best_scraped(hits)
+        if fallback is not None:
+            price, currency, url = fallback
+            result = {
+                "price": price,
+                "currency": currency or settings.price_currency,
+                "source_url": url,
+                "confidence": _coerce_confidence("medium", url),
+                "reason": "Scraped from product page structured data",
+            }
 
     # Polite delay before the next request
     time.sleep(_DDG_DELAY)
@@ -211,3 +337,19 @@ def lookup_price(query: str) -> dict[str, Any]:
         query, result["price"], result["confidence"],
     )
     return result
+
+
+def _best_scraped(hits: list[dict[str, Any]]) -> tuple[float, str | None, str] | None:
+    """Return (price, currency, url) for the best scraped hit, preferring an
+    AU source, else the first scraped price. None if nothing was scraped."""
+    scraped = [h for h in hits if h.get("scraped_price") is not None]
+    if not scraped:
+        return None
+    au_signals = (".com.au", ".au/", "aud")
+    for h in scraped:
+        url = h.get("href", "")
+        cur = (h.get("scraped_currency") or "").lower()
+        if cur == "aud" or any(sig in url.lower() for sig in au_signals):
+            return h["scraped_price"], h.get("scraped_currency"), url
+    h = scraped[0]
+    return h["scraped_price"], h.get("scraped_currency"), h.get("href", "")

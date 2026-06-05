@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     price_currency: str = "AUD"
     price_min_confidence: str = "low"
     check_interval: int = 3600
+    # How many top search-result pages to fetch and scrape structured price
+    # data (JSON-LD / og:price) from. 0 disables page fetching (snippets only).
+    price_fetch_pages: int = 3
+    # Per-page fetch timeout in seconds.
+    price_fetch_timeout: float = 8.0
 
     # --- Server ---
     server_port: int = 8091
