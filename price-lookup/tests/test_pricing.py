@@ -5,8 +5,17 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
+import app.pricing as _pricing_module
 
 import httpx
+
+
+@pytest.fixture(autouse=True)
+def reset_pa_last_call():
+    """Reset PricesAPI rate-limit timestamp between tests so no test bleeds into the next."""
+    _pricing_module._pa_last_call = 0.0
+    yield
+    _pricing_module._pa_last_call = 0.0
 
 from app.pricing import (
     _coerce_confidence,
@@ -388,8 +397,8 @@ def test_staticice_lookup_returns_none_when_empty():
 # PricesAPI.io (second tier)
 # ---------------------------------------------------------------------------
 
-# Confirmed shape: data.products[], each with a top-level price/currency and an
-# offers[] array (per-retailer). Offer field names are a defensive guess.
+# Exact confirmed shape from PricesAPI docs.
+# Each offer has exactly: seller, seller_url, price, currency, shipping, condition, url.
 _PRICESAPI_JSON = {
     "success": True,
     "data": {
@@ -398,20 +407,29 @@ _PRICESAPI_JSON = {
         "products": [
             {
                 "position": 1,
+                "pid": 12345,
                 "title": "Breville Rice Master 7 Cup Rice Cooker",
                 "price": 129.0,
                 "currency": "AUD",
                 "source": "The Good Guys",
+                "offerCount": 3,
                 "offers": [
-                    {"price": 135.0, "currency": "AUD", "url": "https://www.jbhifi.com.au/y"},
-                    {"price": 119.0, "currency": "AUD", "url": "https://www.bunnings.com.au/z"},
+                    {"seller": "The Good Guys", "seller_url": "https://thegoodguys.com.au",
+                     "price": 129.0, "currency": "AUD", "shipping": 0, "condition": "New",
+                     "url": "https://www.thegoodguys.com.au/x"},
+                    {"seller": "JB Hi-Fi", "seller_url": "https://www.jbhifi.com.au",
+                     "price": 135.0, "currency": "AUD", "shipping": 0, "condition": "New",
+                     "url": "https://www.jbhifi.com.au/y"},
+                    {"seller": "Bunnings", "seller_url": "https://www.bunnings.com.au",
+                     "price": 119.0, "currency": "AUD", "shipping": None, "condition": "New",
+                     "url": "https://www.bunnings.com.au/z"},
                 ],
-                "offerCount": 2,
             },
             {"position": 2, "title": "Rice cooker spare lid", "price": 9.95,
-             "currency": "AUD", "offers": [], "offerCount": 0},
+             "currency": "AUD", "offerCount": 0, "offers": []},
         ],
     },
+    "meta": {"latency_ms": 41000, "cache_source": "miss"},
 }
 
 
@@ -434,10 +452,58 @@ def test_pricesapi_lookup_medians_best_match_offers():
     assert result["confidence"] == "high"
     assert result["source_url"].startswith("https://")
 
+    # Auth header must be Bearer, and offers_limit must be requested.
+    call_kwargs = mock_get.call_args
+    assert call_kwargs.kwargs["headers"]["Authorization"].startswith("Bearer pricesapi_")
+    assert call_kwargs.kwargs["params"]["offers_limit"] == 20
+
+
+def test_pricesapi_lookup_falls_back_to_headline_price_when_offers_empty():
+    """degraded=true response: offers[] empty, headline price still usable."""
+    data = {
+        "success": True,
+        "data": {"products": [{"title": "Breville Rice Master", "price": 129.0,
+                                "currency": "AUD", "offerCount": 0, "offers": []}]},
+        "meta": {"degraded": True, "cache_source": "miss"},
+    }
+    with patch("app.pricing.httpx.get") as mock_get:
+        resp = MagicMock()
+        resp.json.return_value = data
+        resp.raise_for_status = MagicMock()
+        mock_get.return_value = resp
+        result = _pricesapi_lookup("Breville Rice Master", _pa_settings())
+    assert result["price"] == 129.0
+    assert result["confidence"] == "medium"  # only 1 price point
+
 
 def test_pricesapi_lookup_none_on_http_error():
     with patch("app.pricing.httpx.get", side_effect=httpx.ConnectError("no net")):
         assert _pricesapi_lookup("anything", _pa_settings()) is None
+
+
+def test_pricesapi_lookup_rate_limit_wait():
+    """A second call within the window triggers a sleep for the remaining gap."""
+    import app.pricing as _pricing
+
+    # Monotonic always returns 1000.0; last call was 3s ago → expect ~7s sleep.
+    fake_now = 1000.0
+    with (
+        patch("app.pricing.time.monotonic", return_value=fake_now),
+        patch("app.pricing.time.sleep") as mock_sleep,
+        patch("app.pricing.httpx.get") as mock_get,
+    ):
+        _pricing._pa_last_call = fake_now - 3.0  # 3s ago, inside the 10s window
+
+        resp = MagicMock()
+        resp.json.return_value = {"data": {"products": []}}
+        resp.raise_for_status = MagicMock()
+        mock_get.return_value = resp
+
+        _pricesapi_lookup("anything", _pa_settings())
+
+    mock_sleep.assert_called_once()
+    wait = mock_sleep.call_args[0][0]
+    assert abs(wait - 7.0) < 0.1  # _PA_MIN_INTERVAL(10) - elapsed(3)
 
 
 def test_pricesapi_lookup_none_when_no_results():
