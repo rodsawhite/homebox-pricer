@@ -8,21 +8,30 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi import FastAPI, Form, HTTPException, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from . import __version__
+from .amazon import match_orders_to_items, parse_amazon_csv
+
+logger = logging.getLogger(__name__)
 from .config import get_settings
 from .db import (
+    count_amazon_by_status,
     count_by_status,
+    get_amazon_order,
     get_candidate,
     init_db,
+    list_amazon_orders,
     list_candidates,
     refresh_candidate,
+    set_amazon_match,
+    set_amazon_status,
     set_candidate_status,
     update_candidate_price,
+    upsert_amazon_orders,
 )
 from .homebox import HomeboxClient, HomeboxError
 from .logging_config import configure_logging
@@ -298,6 +307,140 @@ def api_lookup(body: LookupRequest) -> dict[str, Any]:
         raise HTTPException(400, "query must not be empty")
     result = lookup_price(body.query.strip())
     return {"query": body.query.strip(), **result}
+
+
+# ---------------------------------------------------------------------------
+# Amazon import tab
+# ---------------------------------------------------------------------------
+
+
+@app.get("/amazon", response_class=HTMLResponse)
+def amazon_page(
+    request: Request,
+    status: str | None = None,
+    flash: str = "",
+    flash_type: str = "ok",
+) -> Any:
+    orders_raw = list_amazon_orders(status=status)
+    counts = count_amazon_by_status()
+
+    # Enrich each row with the Homebox item name (not stored in DB — look up
+    # from a single list_items call so we avoid N API calls).
+    hb_names: dict[str, str] = {}
+    if any(o["homebox_id"] for o in orders_raw):
+        try:
+            items = HomeboxClient().list_items()
+            hb_names = {i["id"]: i.get("name", "") for i in items}
+        except HomeboxError:
+            pass
+
+    orders = []
+    for o in orders_raw:
+        d = dict(o)
+        d["homebox_name"] = hb_names.get(o["homebox_id"], "") if o["homebox_id"] else ""
+        orders.append(d)
+
+    return _TEMPLATES.TemplateResponse(
+        request,
+        "amazon.html",
+        {
+            "orders": orders,
+            "counts": counts,
+            "total": sum(counts.values()),
+            "status_filter": status,
+            "flash": {"type": flash_type, "message": flash} if flash else None,
+        },
+    )
+
+
+@app.post("/api/amazon/import")
+async def amazon_import(request: Request, file: UploadFile = File(...)) -> Any:
+    """Parse an uploaded Amazon CSV, insert new rows, run fuzzy matching."""
+    content = await file.read()
+    try:
+        orders = parse_amazon_csv(content)
+    except ValueError as exc:
+        if _wants_html(request):
+            return RedirectResponse(
+                f"/amazon?flash={str(exc)[:120]}&flash_type=err", status_code=303
+            )
+        raise HTTPException(400, str(exc)) from exc
+
+    inserted, skipped = upsert_amazon_orders(orders)
+
+    # Run fuzzy matching only for newly-inserted rows (status=unmatched).
+    unmatched = [dict(o) for o in list_amazon_orders(status="unmatched")]
+    if unmatched:
+        try:
+            hb_items = HomeboxClient().list_items()
+        except HomeboxError as exc:
+            logger.warning("Homebox unavailable during Amazon import matching: %s", exc)
+            hb_items = []
+
+        if hb_items:
+            matched_rows = match_orders_to_items(unmatched, hb_items)
+            for order_dict, best_item, score in matched_rows:
+                if best_item:
+                    set_amazon_match(order_dict["id"], best_item["id"], score)
+
+    msg = f"Imported {inserted} new order(s); {skipped} already known."
+    if _wants_html(request):
+        return RedirectResponse(
+            f"/amazon?flash={msg}&flash_type=ok", status_code=303
+        )
+    return {"inserted": inserted, "skipped": skipped}
+
+
+@app.post("/api/amazon/{order_id}/apply")
+def amazon_apply(order_id: int, request: Request) -> Any:
+    """Write purchasePrice, purchaseFrom, purchaseDate to the matched Homebox item."""
+    row = get_amazon_order(order_id)
+    if not row:
+        raise HTTPException(404, "Order not found")
+    if row["status"] not in ("matched", "unmatched"):
+        raise HTTPException(400, f"Order is already {row['status']}")
+    if not row["homebox_id"]:
+        raise HTTPException(400, "No Homebox item matched to this order")
+    if not row["unit_price"]:
+        raise HTTPException(400, "No price on this order row")
+
+    try:
+        client = HomeboxClient()
+        item = client.get_item(row["homebox_id"])
+        from .homebox import _build_put_payload
+        payload = _build_put_payload(item)
+        payload["purchasePrice"] = row["unit_price"]
+        payload["purchaseFrom"] = row["seller"] or "Amazon"
+        if row["order_date"]:
+            payload["purchaseTime"] = row["order_date"] + "T00:00:00Z"
+        client.put_item(row["homebox_id"], payload)
+    except HomeboxError as exc:
+        if _wants_html(request):
+            return RedirectResponse(
+                f"/amazon?flash=Homebox+error:+{str(exc)[:80]}&flash_type=err", status_code=303
+            )
+        raise HTTPException(502, str(exc)) from exc
+
+    set_amazon_status(order_id, "applied")
+    logger.info(
+        "Amazon import applied: order %s → homebox %s price=%.2f",
+        row["order_id"], row["homebox_id"], row["unit_price"],
+    )
+
+    if _wants_html(request):
+        return RedirectResponse("/amazon?flash=Purchase+data+applied&flash_type=ok", status_code=303)
+    return {"result": "applied"}
+
+
+@app.post("/api/amazon/{order_id}/skip")
+def amazon_skip(order_id: int, request: Request) -> Any:
+    row = get_amazon_order(order_id)
+    if not row:
+        raise HTTPException(404, "Order not found")
+    set_amazon_status(order_id, "skipped")
+    if _wants_html(request):
+        return RedirectResponse("/amazon", status_code=303)
+    return {"result": "skipped"}
 
 
 # ---------------------------------------------------------------------------
