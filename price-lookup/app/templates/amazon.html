@@ -105,14 +105,21 @@
   {# ── Upload card ── #}
   <div class="upload-card">
     <div class="section-title">📥 Import Amazon order history</div>
-    <ol>
-      <li>Go to <strong>amazon.com.au → Account → <a href="https://www.amazon.com.au/hz/privacy-central/data-requests/preview.html" target="_blank" rel="noopener">Request Your Data</a></strong> (Privacy Central)</li>
-      <li>Choose <strong>"Your Orders"</strong> from the dropdown → <strong>Submit Request</strong></li>
-      <li>Confirm via the email Amazon sends, then wait (usually a few hours)</li>
-      <li>Download &amp; unzip the archive; find <strong>Retail.OrderHistory.1.csv</strong></li>
-      <li>Upload that CSV below</li>
-    </ol>
-    <p>Amazon retired the old one-click "Order History Reports" page, so this data request is now the official route. Re-uploading the same CSV is safe — already-imported order lines are silently skipped.</p>
+
+    <p><strong>Fast (recommended):</strong> install the free
+      <a href="https://chromewebstore.google.com/detail/amazon-order-history-repo/mgkilgclilajckgnedgjgnfdokkgnibi" target="_blank" rel="noopener">Amazon Order History Reporter</a>
+      (azad) browser extension. Open it while logged into amazon.com.au, pick a
+      date range, and export the <strong>Items</strong> report as CSV. Works in
+      your browser so 2FA just works — no waiting.</p>
+
+    <p><strong>Official (slow):</strong>
+      <a href="https://www.amazon.com.au/hz/privacy-central/data-requests/preview.html" target="_blank" rel="noopener">Request Your Data</a>
+      → "Your Orders" → confirm by email → download the archive (can take days
+      to weeks) → unzip → <strong>Retail.OrderHistory.1.csv</strong>.</p>
+
+    <p style="color:#777">Either CSV works — the importer auto-detects the column
+      layout. Re-uploading the same file is safe; known order lines are skipped.</p>
+
     <form method="post" action="/api/amazon/import" enctype="multipart/form-data">
       <div class="upload-row">
         <input type="file" name="file" accept=".csv,text/csv" required>

@@ -60,6 +60,23 @@ def test_parse_legacy_csv():
     assert orders[0]["seller"] == "Amazon AU"
 
 
+# azad extension ("Amazon Order History Reporter") Items export: uses
+# "description" for the title and "price" for the amount.
+_AZAD_CSV = """\
+order id,date,description,quantity,price,ASIN
+249-1112223-3334445,2024-05-02,Logitech MX Master 3S Mouse,1,159.00,B0B11NG89C
+"""
+
+
+def test_parse_azad_csv():
+    orders = parse_amazon_csv(_AZAD_CSV)
+    assert len(orders) == 1
+    assert orders[0]["title"] == "Logitech MX Master 3S Mouse"
+    assert orders[0]["unit_price"] == 159.0
+    assert orders[0]["order_date"] == "2024-05-02"
+    assert orders[0]["asin"] == "B0B11NG89C"
+
+
 def test_parse_csv_bytes():
     orders = parse_amazon_csv(_RMD_CSV.encode("utf-8"))
     assert len(orders) == 2
