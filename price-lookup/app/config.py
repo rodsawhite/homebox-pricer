@@ -33,6 +33,15 @@ class Settings(BaseSettings):
     # price source. When it returns AU listings the local model is skipped
     # entirely; otherwise the lookup falls through to DDG + Ollama.
     price_use_staticice: bool = True
+    # PricesAPI.io — a paid product-search API (multi-retailer, AU default,
+    # real-time). When a key is set it runs as the *second* tier, after
+    # staticICE and before the DDG + Ollama fallback. Empty key disables it.
+    prices_api_key: str = ""
+    prices_api_url: str = "https://api.pricesapi.io/api/v1/products/search"
+    prices_api_country: str = "au"
+    # PricesAPI scrapes in real time and can take ~45s per call, so it needs a
+    # much longer timeout than the page-scrape fetches.
+    prices_api_timeout: float = 90.0
     # How many top search-result pages to fetch and scrape structured price
     # data (JSON-LD / og:price) from. 0 disables page fetching (snippets only).
     price_fetch_pages: int = 3

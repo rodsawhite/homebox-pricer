@@ -16,9 +16,11 @@ from app.pricing import (
     _null_result,
     _parse_model_output,
     _parse_staticice,
+    _pricesapi_lookup,
     _staticice_lookup,
     lookup_price,
 )
+from app.config import Settings
 
 
 # ---------------------------------------------------------------------------
@@ -380,6 +382,127 @@ def test_staticice_lookup_returns_none_when_empty():
         resp.raise_for_status = MagicMock()
         mock_get.return_value = resp
         assert _staticice_lookup("obscure xyz", timeout=8.0) is None
+
+
+# ---------------------------------------------------------------------------
+# PricesAPI.io (second tier)
+# ---------------------------------------------------------------------------
+
+# Confirmed shape: data.products[], each with a top-level price/currency and an
+# offers[] array (per-retailer). Offer field names are a defensive guess.
+_PRICESAPI_JSON = {
+    "success": True,
+    "data": {
+        "query": "Breville rice cooker",
+        "country": "au",
+        "products": [
+            {
+                "position": 1,
+                "title": "Breville Rice Master 7 Cup Rice Cooker",
+                "price": 129.0,
+                "currency": "AUD",
+                "source": "The Good Guys",
+                "offers": [
+                    {"price": 135.0, "currency": "AUD", "url": "https://www.jbhifi.com.au/y"},
+                    {"price": 119.0, "currency": "AUD", "url": "https://www.bunnings.com.au/z"},
+                ],
+                "offerCount": 2,
+            },
+            {"position": 2, "title": "Rice cooker spare lid", "price": 9.95,
+             "currency": "AUD", "offers": [], "offerCount": 0},
+        ],
+    },
+}
+
+
+def _pa_settings():
+    return Settings(prices_api_key="pricesapi_test", prices_api_timeout=90.0)
+
+
+def test_pricesapi_lookup_medians_best_match_offers():
+    with patch("app.pricing.httpx.get") as mock_get:
+        resp = MagicMock()
+        resp.json.return_value = _PRICESAPI_JSON
+        resp.raise_for_status = MagicMock()
+        mock_get.return_value = resp
+
+        result = _pricesapi_lookup("Breville Rice Master rice cooker", _pa_settings())
+
+    # Median of 119/129/135 from the best-matching product (not the spare lid).
+    assert result["price"] == 129.0
+    assert result["currency"] == "AUD"
+    assert result["confidence"] == "high"
+    assert result["source_url"].startswith("https://")
+
+
+def test_pricesapi_lookup_none_on_http_error():
+    with patch("app.pricing.httpx.get", side_effect=httpx.ConnectError("no net")):
+        assert _pricesapi_lookup("anything", _pa_settings()) is None
+
+
+def test_pricesapi_lookup_none_when_no_results():
+    with patch("app.pricing.httpx.get") as mock_get:
+        resp = MagicMock()
+        resp.json.return_value = {"success": True, "data": {"results": []}}
+        resp.raise_for_status = MagicMock()
+        mock_get.return_value = resp
+        assert _pricesapi_lookup("obscure", _pa_settings()) is None
+
+
+def test_pricesapi_lookup_none_when_offers_unparseable():
+    """Unknown offer field names → no price → fall through (returns None)."""
+    with patch("app.pricing.httpx.get") as mock_get:
+        resp = MagicMock()
+        resp.json.return_value = {
+            "data": {"results": [{"title": "Widget", "offers": [{"cost_in_cents": 1299}]}]}
+        }
+        resp.raise_for_status = MagicMock()
+        mock_get.return_value = resp
+        assert _pricesapi_lookup("Widget", _pa_settings()) is None
+
+
+def test_lookup_price_uses_pricesapi_when_staticice_misses():
+    """staticICE returns nothing, a key is set → PricesAPI is used, model skipped."""
+    with (
+        patch("app.pricing.get_settings", return_value=_pa_settings()),
+        patch("app.pricing._staticice_lookup", return_value=None),
+        patch("app.pricing.httpx.get") as mock_get,
+        patch("app.pricing.DDGS") as mock_ddgs,
+        patch("app.pricing.httpx.post") as mock_post,
+        patch("app.pricing.time.sleep"),
+    ):
+        resp = MagicMock()
+        resp.json.return_value = _PRICESAPI_JSON
+        resp.raise_for_status = MagicMock()
+        mock_get.return_value = resp
+
+        result = lookup_price("Breville Rice Master rice cooker")
+
+    assert result["price"] == 129.0
+    mock_ddgs.assert_not_called()
+    mock_post.assert_not_called()
+
+
+def test_lookup_price_skips_pricesapi_without_key():
+    """No key configured → PricesAPI never called, falls straight to DDG path."""
+    with (
+        patch("app.pricing.get_settings", return_value=Settings(prices_api_key="")),
+        patch("app.pricing._staticice_lookup", return_value=None),
+        patch("app.pricing._pricesapi_lookup") as mock_pa,
+        patch("app.pricing.DDGS") as mock_ddgs,
+        patch("app.pricing.httpx.post", side_effect=httpx.ConnectError("x")),
+        patch("app.pricing.httpx.get", side_effect=httpx.ConnectError("x")),
+        patch("app.pricing.time.sleep"),
+    ):
+        ctx = MagicMock()
+        ctx.__enter__ = MagicMock(return_value=ctx)
+        ctx.__exit__ = MagicMock(return_value=False)
+        ctx.text.return_value = _MOCK_HITS
+        mock_ddgs.return_value = ctx
+
+        lookup_price("Sony WH-1000XM5")
+
+    mock_pa.assert_not_called()
 
 
 def test_lookup_price_uses_staticice_first_skipping_model():

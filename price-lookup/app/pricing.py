@@ -291,6 +291,108 @@ def _staticice_lookup(query: str, timeout: float) -> dict[str, Any] | None:
     }
 
 
+# --- PricesAPI.io: paid multi-retailer product-search API -------------------
+#
+# A real-time product search that returns matched products, each with merchant
+# offers inline. Country defaults to AU. It sits in the second tier — used only
+# when staticICE has no match — so we don't spend quota on common electronics.
+#
+# Confirmed response shape (api.pricesapi.io):
+#   {success, data:{products:[{title, price, currency, source, offers:[...],
+#                              offerCount}]}}
+# Each product carries a top-level price/currency; offers[] (when populated)
+# lists the same product across retailers. Offer field names aren't documented,
+# so the parser tries common variants and falls through if it can't read a price
+# — a schema mismatch degrades to the next tier, it never breaks the lookup.
+
+_PA_PRICE_KEYS = ("price", "amount", "value", "current_price", "currentPrice")
+_PA_CURRENCY_KEYS = ("currency", "priceCurrency", "currencyCode", "currency_code")
+_PA_URL_KEYS = ("url", "link", "href", "offerUrl", "offer_url")
+
+
+def _pa_first(obj: dict[str, Any], keys: tuple[str, ...]) -> Any:
+    for k in keys:
+        if obj.get(k) not in (None, ""):
+            return obj[k]
+    return None
+
+
+def _pa_offers(result: dict[str, Any]) -> list[dict[str, Any]]:
+    """Offers may be nested under a few likely keys, or be the result itself."""
+    for k in ("offers", "merchantOffers", "merchant_offers", "listings"):
+        val = result.get(k)
+        if isinstance(val, list):
+            return [o for o in val if isinstance(o, dict)]
+    return []
+
+
+def _pricesapi_lookup(query: str, settings: Any) -> dict[str, Any] | None:
+    """Second-tier price source. Returns a result dict, or None to fall through."""
+    try:
+        resp = httpx.get(
+            settings.prices_api_url,
+            params={"q": query, "country": settings.prices_api_country, "limit": 5},
+            headers={"x-api-key": settings.prices_api_key},
+            timeout=settings.prices_api_timeout,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.warning("PricesAPI request failed for %r: %s", query, exc)
+        return None
+    except Exception as exc:  # never let a parser bug break the lookup
+        logger.warning("PricesAPI error for %r: %s — falling back", query, exc)
+        return None
+
+    # Confirmed shape: {data:{products:[...]}}. Tolerate "results" too.
+    block = data.get("data", data) if isinstance(data, dict) else {}
+    products = block.get("products") or block.get("results") if isinstance(block, dict) else None
+    if not isinstance(products, list) or not products:
+        return None
+
+    # Pick the product whose title best matches the query, then collect every
+    # price it carries (top-level + per-retailer offers) and take the median —
+    # robust across retailers and against outliers.
+    q_tokens = _significant_tokens(query)
+
+    def _title_score(r: dict[str, Any]) -> int:
+        return len(q_tokens & _significant_tokens(str(r.get("title", ""))))
+
+    best = max((r for r in products if isinstance(r, dict)), key=_title_score, default=None)
+    if best is None:
+        return None
+
+    prices: list[float] = []
+    currency = best.get("currency")
+    best_url = None
+
+    # Top-level product price.
+    top = _coerce_price(best.get("price"))
+    if top is not None:
+        prices.append(top)
+    # Per-retailer offers (field names vary — try common variants).
+    for offer in _pa_offers(best):
+        p = _coerce_price(_pa_first(offer, _PA_PRICE_KEYS))
+        if p is None:
+            continue
+        prices.append(p)
+        currency = currency or _pa_first(offer, _PA_CURRENCY_KEYS)
+        best_url = best_url or _pa_first(offer, _PA_URL_KEYS)
+
+    if not prices:
+        return None
+
+    price = round(statistics.median(prices), 2)
+    confidence = "high" if len(prices) >= 3 else "medium"
+    return {
+        "price": price,
+        "currency": str(currency or settings.price_currency).upper(),
+        "source_url": best_url,
+        "confidence": confidence,
+        "reason": f"Median of {len(prices)} PricesAPI price(s) for {best.get('title', query)!r}"[:500],
+    }
+
+
 def _ollama_extract(prompt: str) -> dict[str, Any]:
     """Send prompt to Ollama and return parsed JSON. Never raises on bad JSON."""
     settings = get_settings()
@@ -402,7 +504,8 @@ def lookup_price(query: str) -> dict[str, Any]:
 
     Pipeline (each step falls through to the next if it yields no price):
       1. staticICE.com.au — AU price-comparison aggregator, deterministic, no LLM.
-      2. DDG search → scrape JSON-LD/og:meta off the top pages → Ollama parse.
+      2. PricesAPI.io — paid multi-retailer search (only if a key is configured).
+      3. DDG search → scrape JSON-LD/og:meta off the top pages → Ollama parse.
 
     Returns a dict with keys: price, currency, source_url, confidence, reason.
     Never raises — errors are captured in the returned dict.
@@ -417,6 +520,15 @@ def lookup_price(query: str) -> dict[str, Any]:
                 query, si["price"], si["confidence"],
             )
             return si
+
+    if settings.prices_api_key:
+        pa = _pricesapi_lookup(query, settings)
+        if pa is not None and pa["price"] is not None:
+            logger.info(
+                "Price result (PricesAPI) for %r: price=%s confidence=%s",
+                query, pa["price"], pa["confidence"],
+            )
+            return pa
 
     return _ddg_ollama_lookup(query, settings)
 
