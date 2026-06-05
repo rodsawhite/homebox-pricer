@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Amazon Import</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; font-size: 15px; background: #f5f5f5; color: #222; }
+
+    header {
+      background: #1a1a2e; color: #eee; padding: 14px 24px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    header h1 { font-size: 1.15rem; font-weight: 600; }
+    header nav a { color: #aac; text-decoration: none; margin-left: 18px; font-size: 0.85rem; }
+    header nav a:hover { color: #fff; }
+    header nav a.active { color: #fff; border-bottom: 2px solid #fff; padding-bottom: 2px; }
+
+    .flash { padding: 10px 24px; font-size: 0.88rem; }
+    .flash-ok  { background: #d1e7dd; color: #0f5132; }
+    .flash-err { background: #f8d7da; color: #842029; }
+
+    main { padding: 24px; max-width: 1100px; }
+
+    .section-title { font-size: 1rem; font-weight: 600; margin-bottom: 12px; }
+
+    .upload-card {
+      background: #fff; border: 1px solid #e0e0e0; border-radius: 8px;
+      padding: 24px; margin-bottom: 28px; max-width: 560px;
+    }
+    .upload-card p { font-size: 0.88rem; color: #555; margin-bottom: 16px; line-height: 1.5; }
+    .upload-card ol { font-size: 0.88rem; color: #555; margin-left: 18px; margin-bottom: 16px; line-height: 1.8; }
+    .upload-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .upload-row input[type=file] { flex: 1; font-size: 0.88rem; }
+
+    .stats-bar {
+      display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 20px;
+    }
+    .stat { background: #fff; border: 1px solid #e0e0e0; border-radius: 6px;
+            padding: 8px 18px; font-size: 0.88rem; }
+    .stat strong { font-size: 1.1rem; display: block; }
+
+    table { width: 100%; border-collapse: collapse; background: #fff;
+            border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden; }
+    th { background: #f8f9fa; text-align: left; padding: 9px 12px;
+         font-size: 0.82rem; color: #555; border-bottom: 1px solid #dee2e6; }
+    td { padding: 9px 12px; font-size: 0.85rem; border-bottom: 1px solid #f0f0f0;
+         vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+    tr.status-applied { opacity: 0.55; }
+    tr.status-skipped { opacity: 0.45; }
+
+    .badge {
+      display: inline-block; padding: 2px 8px; border-radius: 99px;
+      font-size: 0.73rem; font-weight: 600; white-space: nowrap;
+    }
+    .badge-matched   { background: #cff4fc; color: #055160; }
+    .badge-unmatched { background: #e2e3e5; color: #41464b; }
+    .badge-applied   { background: #d1e7dd; color: #0f5132; }
+    .badge-skipped   { background: #f8d7da; color: #842029; }
+
+    .score { font-size: 0.78rem; color: #777; }
+
+    .btn {
+      padding: 5px 12px; border: none; border-radius: 4px;
+      font-size: 0.82rem; font-weight: 600; cursor: pointer; white-space: nowrap;
+    }
+    .btn-apply  { background: #198754; color: #fff; }
+    .btn-apply:hover  { background: #146c43; }
+    .btn-skip   { background: #6c757d; color: #fff; }
+    .btn-skip:hover   { background: #565e64; }
+    .btn-upload { background: #ff9900; color: #111; }
+    .btn-upload:hover { background: #e68a00; }
+
+    .match-name { font-weight: 500; }
+    .no-match   { color: #aaa; font-style: italic; font-size: 0.82rem; }
+
+    .tab-notice { background: #fff3cd; color: #856404; border-radius: 6px;
+                  padding: 10px 16px; margin-bottom: 20px; font-size: 0.88rem; }
+
+    .filter-bar { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
+    .filter-bar a { font-size: 0.85rem; color: #0066cc; text-decoration: none; }
+    .filter-bar a.active { font-weight: 700; color: #222; text-decoration: none; }
+    .filter-bar a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>📦 Amazon Import</h1>
+  <nav>
+    <a href="/">Price Queue</a>
+    <a href="/amazon" class="active">Amazon Import</a>
+    <a href="/status">Status</a>
+  </nav>
+</header>
+
+{% if flash %}
+  <div class="flash flash-{{ flash.type }}">{{ flash.message }}</div>
+{% endif %}
+
+<main>
+
+  {# ── Upload card ── #}
+  <div class="upload-card">
+    <div class="section-title">📥 Import Amazon order history</div>
+    <ol>
+      <li>Go to <strong>amazon.com.au → Returns &amp; Orders → Order History Reports</strong></li>
+      <li>Select date range, click <strong>Request Report</strong>, then <strong>Download</strong></li>
+      <li>Upload the CSV file below</li>
+    </ol>
+    <p>Re-uploading the same CSV is safe — already-imported order lines are silently skipped.</p>
+    <form method="post" action="/api/amazon/import" enctype="multipart/form-data">
+      <div class="upload-row">
+        <input type="file" name="file" accept=".csv,text/csv" required>
+        <button type="submit" class="btn btn-upload">⬆ Upload</button>
+      </div>
+    </form>
+  </div>
+
+  {# ── Stats ── #}
+  {% if counts %}
+  <div class="stats-bar">
+    <div class="stat"><strong>{{ counts.unmatched }}</strong>unmatched</div>
+    <div class="stat"><strong>{{ counts.matched }}</strong>ready to apply</div>
+    <div class="stat"><strong>{{ counts.applied }}</strong>applied</div>
+    <div class="stat"><strong>{{ counts.skipped }}</strong>skipped</div>
+  </div>
+  {% endif %}
+
+  {# ── Filter tabs ── #}
+  {% if orders %}
+  <div class="filter-bar">
+    Show:
+    <a href="/amazon" class="{{ 'active' if not status_filter }}">All ({{ total }})</a>
+    <a href="/amazon?status=matched" class="{{ 'active' if status_filter == 'matched' }}">Ready ({{ counts.matched }})</a>
+    <a href="/amazon?status=unmatched" class="{{ 'active' if status_filter == 'unmatched' }}">Unmatched ({{ counts.unmatched }})</a>
+    <a href="/amazon?status=applied" class="{{ 'active' if status_filter == 'applied' }}">Applied ({{ counts.applied }})</a>
+    <a href="/amazon?status=skipped" class="{{ 'active' if status_filter == 'skipped' }}">Skipped ({{ counts.skipped }})</a>
+  </div>
+
+  {% if counts.unmatched > 0 and not status_filter %}
+    <div class="tab-notice">
+      {{ counts.unmatched }} order(s) couldn't be matched to a Homebox item. They may be items not yet
+      in your inventory, or the name similarity was too low. You can skip them or
+      <a href="/amazon?status=unmatched">review them here</a>.
+    </div>
+  {% endif %}
+
+  <table>
+    <thead>
+      <tr>
+        <th>Order date</th>
+        <th>Amazon title</th>
+        <th>Price paid</th>
+        <th>Seller</th>
+        <th>Matched Homebox item</th>
+        <th>Status</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for o in orders %}
+      <tr class="status-{{ o.status }}">
+        <td style="white-space:nowrap">{{ o.order_date }}</td>
+        <td>{{ o.title | e }}</td>
+        <td style="white-space:nowrap">
+          {% if o.unit_price %}
+            {{ "%.2f" | format(o.unit_price) }} {{ o.currency }}
+          {% else %}
+            <span style="color:#aaa">—</span>
+          {% endif %}
+        </td>
+        <td>{{ o.seller | e if o.seller else "—" }}</td>
+        <td>
+          {% if o.homebox_id %}
+            <span class="match-name">{{ o.homebox_name | e }}</span>
+            <span class="score">&nbsp;({{ "%.0f" | format(o.match_score * 100) }}%)</span>
+          {% else %}
+            <span class="no-match">No match found</span>
+          {% endif %}
+        </td>
+        <td><span class="badge badge-{{ o.status }}">{{ o.status }}</span></td>
+        <td>
+          {% if o.status in ('matched', 'unmatched') %}
+            {% if o.homebox_id and o.unit_price %}
+              <form method="post" action="/api/amazon/{{ o.id }}/apply" style="display:inline">
+                <button class="btn btn-apply">✓ Apply</button>
+              </form>
+            {% endif %}
+            <form method="post" action="/api/amazon/{{ o.id }}/skip" style="display:inline;margin-left:4px">
+              <button class="btn btn-skip">✗ Skip</button>
+            </form>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <div style="color:#888;padding:32px 0;text-align:center">
+      No orders imported yet — upload a CSV above to get started.
+    </div>
+  {% endif %}
+
+</main>
+</body>
+</html>

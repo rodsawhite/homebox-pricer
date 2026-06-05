@@ -215,6 +215,24 @@ class HomeboxClient:
                 raise HomeboxError(f"{what}: {resp.status_code} {resp.text[:200]}")
             return
 
+    def create_item(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """POST a new item. location is optional — Homebox accepts null."""
+        url = f"{self._base}/api/v1/items"
+        what = "create_item"
+        for attempt in range(2):
+            resp = _retry_request(
+                lambda: httpx.post(url, headers=self._auth_header(), json=payload, timeout=10),
+                what=what,
+            )
+            if resp.status_code == 401:
+                if attempt == 0 and self._refresh_if_needed(401):
+                    continue
+                raise HomeboxAuthError(f"{what}: 401 (token expired, no credentials to refresh)")
+            if resp.status_code not in (200, 201):
+                raise HomeboxError(f"{what}: {resp.status_code} {resp.text[:200]}")
+            return resp.json()
+        return {}
+
     def apply_price(self, item_id: str, price: float) -> None:
         """Fetch the full item, set purchasePrice, write it back."""
         item = self.get_item(item_id)

@@ -43,6 +43,25 @@ CREATE TABLE IF NOT EXISTS price_candidates (
 CREATE UNIQUE INDEX IF NOT EXISTS ux_pending_item
     ON price_candidates(homebox_id)
     WHERE status = 'pending';
+
+CREATE TABLE IF NOT EXISTS amazon_orders (
+    id           INTEGER PRIMARY KEY,
+    order_id     TEXT NOT NULL,
+    order_date   TEXT NOT NULL,
+    asin         TEXT,
+    title        TEXT NOT NULL,
+    quantity     INTEGER DEFAULT 1,
+    unit_price   REAL,
+    currency     TEXT DEFAULT 'AUD',
+    seller       TEXT,
+    -- match state
+    homebox_id   TEXT,
+    match_score  REAL,
+    status       TEXT DEFAULT 'unmatched',
+    imported_at  TEXT NOT NULL,
+    applied_at   TEXT,
+    UNIQUE(order_id, asin)
+);
 """
 
 # Applied to DBs created before thumbnail_url was added.
@@ -195,6 +214,79 @@ def count_by_status() -> dict[str, int]:
             "SELECT status, COUNT(*) as n FROM price_candidates GROUP BY status"
         ).fetchall()
     counts: dict[str, int] = {"pending": 0, "applied": 0, "rejected": 0}
+    for row in rows:
+        counts[row["status"]] = row["n"]
+    return counts
+
+
+def upsert_amazon_orders(orders: list[dict]) -> tuple[int, int]:
+    """Insert new Amazon order rows, skipping any already imported (by order_id+asin).
+    Returns (inserted, skipped)."""
+    now = datetime.now(timezone.utc).isoformat()
+    inserted = skipped = 0
+    with get_conn() as conn:
+        for o in orders:
+            cur = conn.execute(
+                """
+                INSERT OR IGNORE INTO amazon_orders
+                    (order_id, order_date, asin, title, quantity,
+                     unit_price, currency, seller, imported_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (o["order_id"], o["order_date"], o.get("asin"), o["title"],
+                 o.get("quantity", 1), o.get("unit_price"), o.get("currency", "AUD"),
+                 o.get("seller"), now),
+            )
+            if cur.lastrowid and cur.rowcount:
+                inserted += 1
+            else:
+                skipped += 1
+    return inserted, skipped
+
+
+def list_amazon_orders(status: str | None = None) -> list[sqlite3.Row]:
+    with get_conn() as conn:
+        if status:
+            return conn.execute(
+                "SELECT * FROM amazon_orders WHERE status=? ORDER BY order_date DESC",
+                (status,),
+            ).fetchall()
+        return conn.execute(
+            "SELECT * FROM amazon_orders ORDER BY order_date DESC"
+        ).fetchall()
+
+
+def get_amazon_order(order_id: int) -> sqlite3.Row | None:
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM amazon_orders WHERE id=?", (order_id,)
+        ).fetchone()
+
+
+def set_amazon_match(order_id: int, homebox_id: str, match_score: float) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE amazon_orders SET homebox_id=?, match_score=?, status='matched' WHERE id=?",
+            (homebox_id, match_score, order_id),
+        )
+
+
+def set_amazon_status(order_id: int, status: str) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    applied_at = now if status == "applied" else None
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE amazon_orders SET status=?, applied_at=? WHERE id=?",
+            (status, applied_at, order_id),
+        )
+
+
+def count_amazon_by_status() -> dict[str, int]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT status, COUNT(*) as n FROM amazon_orders GROUP BY status"
+        ).fetchall()
+    counts: dict[str, int] = {"unmatched": 0, "matched": 0, "applied": 0, "skipped": 0}
     for row in rows:
         counts[row["status"]] = row["n"]
     return counts
