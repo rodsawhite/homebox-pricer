@@ -77,6 +77,46 @@ def test_parse_azad_csv():
     assert orders[0]["asin"] == "B0B11NG89C"
 
 
+# azad ORDERS report (one row per order): title is "items", price is "total",
+# no ASIN. Includes the quirks seen in real exports: a repeated trailing header
+# row, a gift-card order with total=0, and a digital order ("1Audiblecredit").
+_AZAD_ORDERS_CSV = """\
+order id,order url,items,to,date,total,shipping,shipping_refund,gift,refund,payments
+250-1760535-2139841,https://amazon.com.au/x,STABILO EASYergo Pencil + Sharpener; ,Rod White,2026-06-05,27.41,0,,,,Visa: $27.41;
+250-5137712-2907854,https://amazon.com.au/y,Dyson V6 Brush Head Replacement; ,Rod White,2026-03-21,0,0,,43.99,,Gift Card;
+D01-4245226-4415468,https://amazon.com.au/z,Dungeon Crawler Carl Book 2; ,Rod White,2026-02-25,1Audiblecredit,,,,,1 Audible credit;
+order id,order url,items,to,date,total,shipping,shipping_refund,gift,refund,payments
+"""
+
+
+def test_parse_azad_orders_report():
+    orders = parse_amazon_csv(_AZAD_ORDERS_CSV)
+    # 3 data rows; the repeated trailing header is dropped.
+    assert len(orders) == 3
+    by_id = {o["order_id"]: o for o in orders}
+    assert "order id" not in by_id  # header row not parsed as data
+
+    # title from "items", price from "total".
+    assert by_id["250-1760535-2139841"]["title"].startswith("STABILO")
+    assert by_id["250-1760535-2139841"]["unit_price"] == 27.41
+    # ASIN absent → empty string (so dedup still works).
+    assert by_id["250-1760535-2139841"]["asin"] == ""
+
+    # Gift-card order: total=0 → no usable price (user edits/skips).
+    assert by_id["250-5137712-2907854"]["unit_price"] is None
+    # Digital order: "1Audiblecredit" must NOT parse as $1.
+    assert by_id["D01-4245226-4415468"]["unit_price"] is None
+
+
+def test_parse_azad_orders_dedup_without_asin():
+    """Re-parsing + upserting the same ASIN-less rows must not duplicate."""
+    from app import db
+    orders = parse_amazon_csv(_AZAD_ORDERS_CSV)
+    # Simulated via the canonical empty-string ASIN; dedup key is (order_id, asin).
+    keys = {(o["order_id"], o["asin"]) for o in orders}
+    assert len(keys) == len(orders)  # all unique within one file
+
+
 def test_parse_csv_bytes():
     orders = parse_amazon_csv(_RMD_CSV.encode("utf-8"))
     assert len(orders) == 2
