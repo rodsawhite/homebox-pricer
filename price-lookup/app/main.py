@@ -443,6 +443,86 @@ def amazon_skip(order_id: int, request: Request) -> Any:
     return {"result": "skipped"}
 
 
+@app.post("/api/amazon/bulk-skip")
+def amazon_bulk_skip(request: Request, ids: str = Form(...)) -> Any:
+    """Skip all order IDs in the comma-separated ``ids`` field."""
+    order_ids = [int(i) for i in ids.split(",") if i.strip().isdigit()]
+    for oid in order_ids:
+        set_amazon_status(oid, "skipped")
+    if _wants_html(request):
+        return RedirectResponse(f"/amazon?flash=Skipped+{len(order_ids)}+order(s)&flash_type=ok", status_code=303)
+    return {"result": "skipped", "count": len(order_ids)}
+
+
+@app.post("/api/amazon/bulk-apply")
+def amazon_bulk_apply(request: Request, ids: str = Form(...)) -> Any:
+    """Apply price to all matched+priced orders in the comma-separated ``ids`` field."""
+    order_ids = [int(i) for i in ids.split(",") if i.strip().isdigit()]
+    applied = skipped = 0
+    hb = HomeboxClient()
+    for oid in order_ids:
+        row = get_amazon_order(oid)
+        if not row or not row["homebox_id"] or not row["unit_price"]:
+            skipped += 1
+            continue
+        try:
+            item = hb.get_item(row["homebox_id"])
+            from .homebox import _build_put_payload
+            payload = _build_put_payload(item)
+            payload["purchasePrice"] = float(row["unit_price"])
+            if row["seller"]:
+                payload["purchaseFrom"] = row["seller"]
+            if row["order_date"]:
+                payload["purchaseTime"] = f"{row['order_date']}T00:00:00Z"
+            hb.put_item(row["homebox_id"], payload)
+            set_amazon_status(oid, "applied")
+            applied += 1
+        except HomeboxError as exc:
+            logger.error("bulk-apply failed for order %d: %s", oid, exc)
+            skipped += 1
+    if _wants_html(request):
+        msg = f"Applied+{applied}+order(s)"
+        if skipped:
+            msg += f",+{skipped}+skipped"
+        return RedirectResponse(f"/amazon?flash={msg}&flash_type=ok", status_code=303)
+    return {"result": "ok", "applied": applied, "skipped": skipped}
+
+
+@app.post("/api/amazon/bulk-create")
+def amazon_bulk_create(request: Request, ids: str = Form(...)) -> Any:
+    """Create unmatched orders as new Homebox items (no location)."""
+    order_ids = [int(i) for i in ids.split(",") if i.strip().isdigit()]
+    created = skipped = 0
+    hb = HomeboxClient()
+    for oid in order_ids:
+        row = get_amazon_order(oid)
+        if not row or row["homebox_id"]:
+            skipped += 1
+            continue
+        try:
+            payload: dict = {
+                "name": row["title"],
+                "locationId": None,
+                "purchasePrice": float(row["unit_price"]) if row["unit_price"] else 0,
+                "purchaseFrom": row["seller"] or "Amazon",
+            }
+            if row["order_date"]:
+                payload["purchaseTime"] = f"{row['order_date']}T00:00:00Z"
+            new_item = hb.create_item(payload)
+            set_amazon_match(oid, new_item["id"], 1.0)
+            set_amazon_status(oid, "applied")
+            created += 1
+        except HomeboxError as exc:
+            logger.error("bulk-create failed for order %d: %s", oid, exc)
+            skipped += 1
+    if _wants_html(request):
+        msg = f"Created+{created}+item(s)+in+Homebox"
+        if skipped:
+            msg += f",+{skipped}+failed"
+        return RedirectResponse(f"/amazon?flash={msg}&flash_type=ok", status_code=303)
+    return {"result": "ok", "created": created, "skipped": skipped}
+
+
 # ---------------------------------------------------------------------------
 # Sweep trigger
 # ---------------------------------------------------------------------------

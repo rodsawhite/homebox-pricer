@@ -70,8 +70,11 @@
     .btn-apply:hover  { background: #146c43; }
     .btn-skip   { background: #6c757d; color: #fff; }
     .btn-skip:hover   { background: #565e64; }
+    .btn-create { background: #0d6efd; color: #fff; }
+    .btn-create:hover { background: #0b5ed7; }
     .btn-upload { background: #ff9900; color: #111; }
     .btn-upload:hover { background: #e68a00; }
+    .btn:disabled { opacity: 0.45; cursor: default; }
 
     .match-name { font-weight: 500; }
     .no-match   { color: #aaa; font-style: italic; font-size: 0.82rem; }
@@ -83,6 +86,15 @@
     .filter-bar a { font-size: 0.85rem; color: #0066cc; text-decoration: none; }
     .filter-bar a.active { font-weight: 700; color: #222; text-decoration: none; }
     .filter-bar a:hover { text-decoration: underline; }
+
+    .bulk-bar {
+      display: flex; gap: 8px; align-items: center; margin-bottom: 12px;
+      padding: 10px 14px; background: #fff; border: 1px solid #e0e0e0;
+      border-radius: 6px; flex-wrap: wrap;
+    }
+    .bulk-bar .sel-count { font-size: 0.85rem; color: #555; margin-right: 6px; }
+
+    input[type=checkbox] { width: 15px; height: 15px; cursor: pointer; }
   </style>
 </head>
 <body>
@@ -152,61 +164,79 @@
   {% if counts.unmatched > 0 and not status_filter %}
     <div class="tab-notice">
       {{ counts.unmatched }} order(s) couldn't be matched to a Homebox item. They may be items not yet
-      in your inventory, or the name similarity was too low. You can skip them or
-      <a href="/amazon?status=unmatched">review them here</a>.
+      in your inventory, or the name similarity was too low. You can skip them, create them as new
+      Homebox items, or <a href="/amazon?status=unmatched">review them here</a>.
     </div>
   {% endif %}
 
-  <table>
-    <thead>
-      <tr>
-        <th>Order date</th>
-        <th>Amazon title</th>
-        <th>Price paid</th>
-        <th>Seller</th>
-        <th>Matched Homebox item</th>
-        <th>Status</th>
-        <th>Actions</th>
-      </tr>
-    </thead>
-    <tbody>
-    {% for o in orders %}
-      <tr class="status-{{ o.status }}">
-        <td style="white-space:nowrap">{{ o.order_date }}</td>
-        <td>{{ o.title | e }}</td>
-        <td style="white-space:nowrap">
-          {% if o.unit_price %}
-            {{ "%.2f" | format(o.unit_price) }} {{ o.currency }}
-          {% else %}
-            <span style="color:#aaa">—</span>
-          {% endif %}
-        </td>
-        <td>{{ o.seller | e if o.seller else "—" }}</td>
-        <td>
-          {% if o.homebox_id %}
-            <span class="match-name">{{ o.homebox_name | e }}</span>
-            <span class="score">&nbsp;({{ "%.0f" | format(o.match_score * 100) }}%)</span>
-          {% else %}
-            <span class="no-match">No match found</span>
-          {% endif %}
-        </td>
-        <td><span class="badge badge-{{ o.status }}">{{ o.status }}</span></td>
-        <td>
-          {% if o.status in ('matched', 'unmatched') %}
-            {% if o.homebox_id and o.unit_price %}
-              <form method="post" action="/api/amazon/{{ o.id }}/apply" style="display:inline">
-                <button class="btn btn-apply">✓ Apply</button>
+  {# ── Bulk actions form wrapping the table ── #}
+  <form id="bulk-form" method="post" action="/api/amazon/bulk-skip">
+    <input type="hidden" name="ids" id="bulk-ids">
+
+    <div class="bulk-bar">
+      <span class="sel-count" id="sel-count">0 selected</span>
+      <button type="button" class="btn btn-skip" id="btn-bulk-skip" disabled
+              onclick="submitBulk('/api/amazon/bulk-skip')">✗ Skip selected</button>
+      <button type="button" class="btn btn-apply" id="btn-bulk-apply" disabled
+              onclick="submitBulk('/api/amazon/bulk-apply')">✓ Apply selected</button>
+      <button type="button" class="btn btn-create" id="btn-bulk-create" disabled
+              onclick="submitBulk('/api/amazon/bulk-create')">＋ Create in Homebox</button>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th style="width:32px"><input type="checkbox" id="chk-all" title="Select all"></th>
+          <th>Order date</th>
+          <th>Amazon title</th>
+          <th>Price paid</th>
+          <th>Seller</th>
+          <th>Matched Homebox item</th>
+          <th>Status</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for o in orders %}
+        <tr class="status-{{ o.status }}">
+          <td><input type="checkbox" class="row-chk" value="{{ o.id }}"></td>
+          <td style="white-space:nowrap">{{ o.order_date }}</td>
+          <td>{{ o.title | e }}</td>
+          <td style="white-space:nowrap">
+            {% if o.unit_price %}
+              {{ "%.2f" | format(o.unit_price) }} {{ o.currency }}
+            {% else %}
+              <span style="color:#aaa">—</span>
+            {% endif %}
+          </td>
+          <td>{{ o.seller | e if o.seller else "—" }}</td>
+          <td>
+            {% if o.homebox_id %}
+              <span class="match-name">{{ o.homebox_name | e }}</span>
+              <span class="score">&nbsp;({{ "%.0f" | format(o.match_score * 100) }}%)</span>
+            {% else %}
+              <span class="no-match">No match found</span>
+            {% endif %}
+          </td>
+          <td><span class="badge badge-{{ o.status }}">{{ o.status }}</span></td>
+          <td>
+            {% if o.status in ('matched', 'unmatched') %}
+              {% if o.homebox_id and o.unit_price %}
+                <form method="post" action="/api/amazon/{{ o.id }}/apply" style="display:inline">
+                  <button class="btn btn-apply">✓ Apply</button>
+                </form>
+              {% endif %}
+              <form method="post" action="/api/amazon/{{ o.id }}/skip" style="display:inline;margin-left:4px">
+                <button class="btn btn-skip">✗ Skip</button>
               </form>
             {% endif %}
-            <form method="post" action="/api/amazon/{{ o.id }}/skip" style="display:inline;margin-left:4px">
-              <button class="btn btn-skip">✗ Skip</button>
-            </form>
-          {% endif %}
-        </td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </form>
+
   {% else %}
     <div style="color:#888;padding:32px 0;text-align:center">
       No orders imported yet — upload a CSV above to get started.
@@ -214,5 +244,45 @@
   {% endif %}
 
 </main>
+
+<script>
+  const chkAll = document.getElementById('chk-all');
+  const selCount = document.getElementById('sel-count');
+  const btnSkip = document.getElementById('btn-bulk-skip');
+  const btnApply = document.getElementById('btn-bulk-apply');
+  const btnCreate = document.getElementById('btn-bulk-create');
+  const bulkIds = document.getElementById('bulk-ids');
+
+  function updateBulkBar() {
+    const checked = [...document.querySelectorAll('.row-chk:checked')];
+    const n = checked.length;
+    selCount.textContent = n + ' selected';
+    const disabled = n === 0;
+    btnSkip.disabled = disabled;
+    btnApply.disabled = disabled;
+    btnCreate.disabled = disabled;
+    bulkIds.value = checked.map(c => c.value).join(',');
+    if (chkAll) {
+      const all = document.querySelectorAll('.row-chk');
+      chkAll.indeterminate = n > 0 && n < all.length;
+      chkAll.checked = n > 0 && n === all.length;
+    }
+  }
+
+  if (chkAll) {
+    chkAll.addEventListener('change', () => {
+      document.querySelectorAll('.row-chk').forEach(c => c.checked = chkAll.checked);
+      updateBulkBar();
+    });
+  }
+
+  document.querySelectorAll('.row-chk').forEach(c => c.addEventListener('change', updateBulkBar));
+
+  function submitBulk(action) {
+    const form = document.getElementById('bulk-form');
+    form.action = action;
+    form.submit();
+  }
+</script>
 </body>
 </html>
