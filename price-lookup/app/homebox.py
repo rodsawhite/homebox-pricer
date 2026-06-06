@@ -215,10 +215,62 @@ class HomeboxClient:
                 raise HomeboxError(f"{what}: {resp.status_code} {resp.text[:200]}")
             return
 
-    def create_item(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """POST a new item. location is optional — Homebox accepts null."""
+    def create_item(self, name: str, location_id: str, quantity: int = 1) -> dict[str, Any]:
+        """POST a new item using the ItemCreate schema.
+
+        ItemCreate is NOT the same as ItemUpdate: it accepts only ``name``,
+        ``quantity`` and ``locationId`` (plus optional ``labelIds``/``parentId``).
+        Sending ItemUpdate-only fields (purchasePrice, purchaseFrom, …) or an
+        explicit ``locationId: null`` makes Homebox 500 with "Unknown Error" —
+        a null locationId is unmarshalled into a zero UUID and then violates the
+        location foreign key. Callers must pass a real location id, then set
+        purchase fields with a follow-up apply_price()/put_item().
+        """
         url = f"{self._base}/api/v1/items"
         what = "create_item"
+        payload = {"name": name, "quantity": quantity, "locationId": location_id}
+        for attempt in range(2):
+            resp = _retry_request(
+                lambda: httpx.post(url, headers=self._auth_header(), json=payload, timeout=10),
+                what=what,
+            )
+            if resp.status_code == 401:
+                if attempt == 0 and self._refresh_if_needed(401):
+                    continue
+                raise HomeboxAuthError(f"{what}: 401 (token expired, no credentials to refresh)")
+            if resp.status_code not in (200, 201):
+                logger.error("create_item failed: %s %s — sent %s",
+                             resp.status_code, resp.text[:300], json.dumps(payload))
+                raise HomeboxError(f"{what}: {resp.status_code} {resp.text[:200]}")
+            return resp.json()
+        return {}
+
+    # ------------------------------------------------------------------
+    # Locations
+    # ------------------------------------------------------------------
+
+    def list_locations(self) -> list[dict[str, Any]]:
+        url = f"{self._base}/api/v1/locations"
+        what = "list_locations"
+        for attempt in range(2):
+            resp = _retry_request(
+                lambda: httpx.get(url, headers=self._auth_header(), timeout=10),
+                what=what,
+            )
+            if resp.status_code == 401:
+                if attempt == 0 and self._refresh_if_needed(401):
+                    continue
+                raise HomeboxAuthError(f"{what}: 401 (token expired, no credentials to refresh)")
+            if resp.status_code != 200:
+                raise HomeboxError(f"{what}: {resp.status_code} {resp.text[:200]}")
+            data = resp.json()
+            return data if isinstance(data, list) else data.get("items", [])
+        return []
+
+    def create_location(self, name: str, description: str = "") -> dict[str, Any]:
+        url = f"{self._base}/api/v1/locations"
+        what = "create_location"
+        payload = {"name": name, "description": description}
         for attempt in range(2):
             resp = _retry_request(
                 lambda: httpx.post(url, headers=self._auth_header(), json=payload, timeout=10),
@@ -232,6 +284,27 @@ class HomeboxClient:
                 raise HomeboxError(f"{what}: {resp.status_code} {resp.text[:200]}")
             return resp.json()
         return {}
+
+    def get_or_create_location(self, name: str) -> str:
+        """Return the id of the location named ``name``, creating it if absent."""
+        for loc in self.list_locations():
+            if (loc.get("name") or "").strip().lower() == name.strip().lower():
+                return loc["id"]
+        return self.create_location(name, "Items imported from Amazon order history")["id"]
+
+    def apply_item_purchase(
+        self, item_id: str, price: float, seller: str | None, purchase_date: str | None
+    ) -> None:
+        """Read-modify-write PUT setting purchasePrice/purchaseFrom/purchaseTime."""
+        item = self.get_item(item_id)
+        payload = _build_put_payload(item)
+        payload["purchasePrice"] = price
+        if seller:
+            payload["purchaseFrom"] = seller
+        if purchase_date:
+            # Homebox accepts a date-only or RFC3339 timestamp; send midnight UTC.
+            payload["purchaseTime"] = f"{purchase_date}T00:00:00Z"
+        self.put_item(item_id, payload)
 
     def apply_price(self, item_id: str, price: float) -> None:
         """Fetch the full item, set purchasePrice, write it back."""

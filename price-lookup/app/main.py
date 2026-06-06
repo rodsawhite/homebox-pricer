@@ -405,15 +405,10 @@ def amazon_apply(order_id: int, request: Request) -> Any:
         raise HTTPException(400, "No price on this order row")
 
     try:
-        client = HomeboxClient()
-        item = client.get_item(row["homebox_id"])
-        from .homebox import _build_put_payload
-        payload = _build_put_payload(item)
-        payload["purchasePrice"] = row["unit_price"]
-        payload["purchaseFrom"] = row["seller"] or "Amazon"
-        if row["order_date"]:
-            payload["purchaseTime"] = row["order_date"] + "T00:00:00Z"
-        client.put_item(row["homebox_id"], payload)
+        HomeboxClient().apply_item_purchase(
+            row["homebox_id"], float(row["unit_price"]),
+            row["seller"] or "Amazon", row["order_date"],
+        )
     except HomeboxError as exc:
         if _wants_html(request):
             return RedirectResponse(
@@ -466,15 +461,10 @@ def amazon_bulk_apply(request: Request, ids: str = Form(...)) -> Any:
             skipped += 1
             continue
         try:
-            item = hb.get_item(row["homebox_id"])
-            from .homebox import _build_put_payload
-            payload = _build_put_payload(item)
-            payload["purchasePrice"] = float(row["unit_price"])
-            if row["seller"]:
-                payload["purchaseFrom"] = row["seller"]
-            if row["order_date"]:
-                payload["purchaseTime"] = f"{row['order_date']}T00:00:00Z"
-            hb.put_item(row["homebox_id"], payload)
+            hb.apply_item_purchase(
+                row["homebox_id"], float(row["unit_price"]),
+                row["seller"] or "Amazon", row["order_date"],
+            )
             set_amazon_status(oid, "applied")
             applied += 1
         except HomeboxError as exc:
@@ -490,25 +480,40 @@ def amazon_bulk_apply(request: Request, ids: str = Form(...)) -> Any:
 
 @app.post("/api/amazon/bulk-create")
 def amazon_bulk_create(request: Request, ids: str = Form(...)) -> Any:
-    """Create unmatched orders as new Homebox items (no location)."""
+    """Create unmatched orders as new Homebox items in an "Amazon Imports" location.
+
+    Homebox items require a real location (a null locationId 500s), so we route
+    new items into a dedicated "Amazon Imports" location, created on first use.
+    The user can re-file them into proper locations afterwards. Purchase price /
+    seller / date are set with a follow-up PUT (ItemCreate doesn't accept them).
+    """
     order_ids = [int(i) for i in ids.split(",") if i.strip().isdigit()]
     created = skipped = 0
     hb = HomeboxClient()
+    try:
+        location_id = hb.get_or_create_location("Amazon Imports")
+    except HomeboxError as exc:
+        logger.error("bulk-create could not resolve location: %s", exc)
+        if _wants_html(request):
+            return RedirectResponse(
+                f"/amazon?flash=Homebox+error:+{str(exc)[:80]}&flash_type=err", status_code=303
+            )
+        raise HTTPException(502, str(exc)) from exc
+
     for oid in order_ids:
         row = get_amazon_order(oid)
         if not row or row["homebox_id"]:
             skipped += 1
             continue
         try:
-            payload: dict = {
-                "name": row["title"],
-                "locationId": None,
-                "purchasePrice": float(row["unit_price"]) if row["unit_price"] else 0,
-                "purchaseFrom": row["seller"] or "Amazon",
-            }
-            if row["order_date"]:
-                payload["purchaseTime"] = f"{row['order_date']}T00:00:00Z"
-            new_item = hb.create_item(payload)
+            new_item = hb.create_item(
+                row["title"], location_id, quantity=row["quantity"] or 1
+            )
+            if row["unit_price"]:
+                hb.apply_item_purchase(
+                    new_item["id"], float(row["unit_price"]),
+                    row["seller"] or "Amazon", row["order_date"],
+                )
             set_amazon_match(oid, new_item["id"], 1.0)
             set_amazon_status(oid, "applied")
             created += 1
