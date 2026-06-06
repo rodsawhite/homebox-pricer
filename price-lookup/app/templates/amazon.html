@@ -70,10 +70,10 @@
     .btn-apply:hover  { background: #146c43; }
     .btn-skip   { background: #6c757d; color: #fff; }
     .btn-skip:hover   { background: #565e64; }
-    .btn-create { background: #0d6efd; color: #fff; }
-    .btn-create:hover { background: #0b5ed7; }
     .btn-upload { background: #ff9900; color: #111; }
     .btn-upload:hover { background: #e68a00; }
+    .btn-create { background: #0d6efd; color: #fff; }
+    .btn-create:hover { background: #0b5ed7; }
     .btn:disabled { opacity: 0.45; cursor: default; }
 
     .match-name { font-weight: 500; }
@@ -93,7 +93,6 @@
       border-radius: 6px; flex-wrap: wrap;
     }
     .bulk-bar .sel-count { font-size: 0.85rem; color: #555; margin-right: 6px; }
-
     input[type=checkbox] { width: 15px; height: 15px; cursor: pointer; }
   </style>
 </head>
@@ -257,10 +256,10 @@
     const checked = [...document.querySelectorAll('.row-chk:checked')];
     const n = checked.length;
     selCount.textContent = n + ' selected';
-    const disabled = n === 0;
-    btnSkip.disabled = disabled;
-    btnApply.disabled = disabled;
-    btnCreate.disabled = disabled;
+    const off = n === 0;
+    btnSkip.disabled = off;
+    btnApply.disabled = off;
+    btnCreate.disabled = off;
     bulkIds.value = checked.map(c => c.value).join(',');
     if (chkAll) {
       const all = document.querySelectorAll('.row-chk');
