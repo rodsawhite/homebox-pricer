@@ -8,6 +8,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+from urllib.parse import quote_plus
+
 from fastapi import FastAPI, Form, HTTPException, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -129,13 +131,11 @@ def web_edit(
 ) -> RedirectResponse:
     row = get_candidate(candidate_id)
     if not row:
-        return RedirectResponse("/?flash=Candidate+not+found&flash_type=err", status_code=303)
+        return _flash_redirect("/", "Candidate not found", ok=False)
     if row["status"] != "pending":
-        return RedirectResponse(
-            f"/?flash=Already+{row['status']}&flash_type=err", status_code=303
-        )
+        return _flash_redirect("/", f"Already {row['status']}", ok=False)
     update_candidate_price(candidate_id, price, source_url or None)
-    return RedirectResponse("/?flash=Price+updated&flash_type=ok", status_code=303)
+    return _flash_redirect("/", "Price updated")
 
 
 # ---------------------------------------------------------------------------
@@ -158,55 +158,34 @@ def api_list_candidates(
 
 @app.post("/api/candidates/{candidate_id}/approve")
 def api_approve(candidate_id: int, request: Request) -> Any:
-    row = get_candidate(candidate_id)
-    if not row:
-        if _wants_html(request):
-            return RedirectResponse("/?flash=Candidate+not+found&flash_type=err", status_code=303)
-        raise HTTPException(404, "Candidate not found")
-    if row["status"] != "pending":
-        if _wants_html(request):
-            return RedirectResponse(
-                f"/?flash=Already+{row['status']}&flash_type=err", status_code=303
-            )
-        raise HTTPException(400, f"Candidate is already {row['status']}")
+    row, resp = _guard_pending(candidate_id, request)
+    if resp:
+        return resp
     if row["price"] is None:
-        if _wants_html(request):
-            return RedirectResponse(
-                "/?flash=Set+a+price+before+approving&flash_type=err", status_code=303
-            )
-        raise HTTPException(400, "Cannot approve a candidate with no price — edit it first")
+        return _fail(
+            request, "/", "Set a price before approving", 400,
+            "Cannot approve a candidate with no price — edit it first",
+        )
 
     try:
         HomeboxClient().apply_price(row["homebox_id"], row["price"])
     except HomeboxError as exc:
-        if _wants_html(request):
-            return RedirectResponse(
-                f"/?flash=Homebox+error:+{exc}&flash_type=err", status_code=303
-            )
-        raise HTTPException(502, f"Homebox error: {exc}") from exc
+        return _fail(request, "/", f"Homebox error: {exc}", 502)
 
     set_candidate_status(candidate_id, "applied")
     if _wants_html(request):
-        return RedirectResponse("/?flash=Price+applied+to+Homebox&flash_type=ok", status_code=303)
+        return _flash_redirect("/", "Price applied to Homebox")
     return {"result": "applied"}
 
 
 @app.post("/api/candidates/{candidate_id}/reject")
 def api_reject(candidate_id: int, request: Request) -> Any:
-    row = get_candidate(candidate_id)
-    if not row:
-        if _wants_html(request):
-            return RedirectResponse("/?flash=Candidate+not+found&flash_type=err", status_code=303)
-        raise HTTPException(404, "Candidate not found")
-    if row["status"] != "pending":
-        if _wants_html(request):
-            return RedirectResponse(
-                f"/?flash=Already+{row['status']}&flash_type=err", status_code=303
-            )
-        raise HTTPException(400, f"Candidate is already {row['status']}")
+    _row, resp = _guard_pending(candidate_id, request)
+    if resp:
+        return resp
     set_candidate_status(candidate_id, "rejected")
     if _wants_html(request):
-        return RedirectResponse("/?flash=Candidate+rejected&flash_type=ok", status_code=303)
+        return _flash_redirect("/", "Candidate rejected")
     return {"result": "rejected"}
 
 
@@ -223,17 +202,9 @@ def api_relookup(
     the item is re-fetched from Homebox and the query is rebuilt from its current
     name / manufacturer / model.
     """
-    row = get_candidate(candidate_id)
-    if not row:
-        if _wants_html(request):
-            return RedirectResponse("/?flash=Candidate+not+found&flash_type=err", status_code=303)
-        raise HTTPException(404, "Candidate not found")
-    if row["status"] != "pending":
-        if _wants_html(request):
-            return RedirectResponse(
-                f"/?flash=Already+{row['status']}&flash_type=err", status_code=303
-            )
-        raise HTTPException(400, f"Candidate is already {row['status']}")
+    row, resp = _guard_pending(candidate_id, request)
+    if resp:
+        return resp
 
     settings = get_settings()
     custom = (query or "").strip()
@@ -245,11 +216,7 @@ def api_relookup(
         try:
             item = HomeboxClient().get_item(row["homebox_id"])
         except HomeboxError as exc:
-            if _wants_html(request):
-                return RedirectResponse(
-                    f"/?flash=Homebox+error:+{exc}&flash_type=err", status_code=303
-                )
-            raise HTTPException(502, f"Homebox error: {exc}") from exc
+            return _fail(request, "/", f"Homebox error: {exc}", 502)
         name = item.get("name", "") or row["item_name"]
         search_query = build_search_query(item, settings.price_currency)
 
@@ -266,7 +233,7 @@ def api_relookup(
     )
 
     if _wants_html(request):
-        return RedirectResponse("/?flash=Re-lookup+complete&flash_type=ok", status_code=303)
+        return _flash_redirect("/", "Re-lookup complete")
     return {"result": "updated", **result}
 
 
@@ -289,6 +256,43 @@ def api_edit(candidate_id: int, body: CandidateEdit) -> dict[str, str]:
 def _wants_html(request: Request) -> bool:
     accept = request.headers.get("accept", "")
     return "text/html" in accept and "application/json" not in accept
+
+
+def _flash_redirect(path: str, message: str, ok: bool = True) -> RedirectResponse:
+    """303 redirect carrying a flash message (the PRG pattern used everywhere)."""
+    ftype = "ok" if ok else "err"
+    return RedirectResponse(
+        f"{path}?flash={quote_plus(message)}&flash_type={ftype}", status_code=303
+    )
+
+
+def _fail(
+    request: Request, path: str, message: str, status: int, detail: str | None = None
+) -> RedirectResponse:
+    """Content-negotiated failure: HTML clients get a flash redirect, JSON
+    clients get an HTTPException (which is raised, not returned)."""
+    if _wants_html(request):
+        return _flash_redirect(path, message, ok=False)
+    raise HTTPException(status, detail or message)
+
+
+def _guard_pending(
+    candidate_id: int, request: Request, path: str = "/"
+) -> tuple[Any, RedirectResponse | None]:
+    """Fetch a candidate and require it to be pending.
+
+    Returns ``(row, None)`` on success, or ``(None, response)`` for HTML callers
+    to return. For JSON callers the failure path raises HTTPException directly.
+    """
+    row = get_candidate(candidate_id)
+    if not row:
+        return None, _fail(request, path, "Candidate not found", 404)
+    if row["status"] != "pending":
+        return None, _fail(
+            request, path, f"Already {row['status']}", 400,
+            f"Candidate is already {row['status']}",
+        )
+    return row, None
 
 
 # ---------------------------------------------------------------------------
@@ -360,11 +364,7 @@ async def amazon_import(request: Request, file: UploadFile = File(...)) -> Any:
     try:
         orders = parse_amazon_csv(content)
     except ValueError as exc:
-        if _wants_html(request):
-            return RedirectResponse(
-                f"/amazon?flash={str(exc)[:120]}&flash_type=err", status_code=303
-            )
-        raise HTTPException(400, str(exc)) from exc
+        return _fail(request, "/amazon", str(exc)[:120], 400, str(exc))
 
     inserted, skipped = upsert_amazon_orders(orders)
 
@@ -383,10 +383,9 @@ async def amazon_import(request: Request, file: UploadFile = File(...)) -> Any:
                 if best_item:
                     set_amazon_match(order_dict["id"], best_item["id"], score)
 
-    msg = f"Imported {inserted} new order(s); {skipped} already known."
     if _wants_html(request):
-        return RedirectResponse(
-            f"/amazon?flash={msg}&flash_type=ok", status_code=303
+        return _flash_redirect(
+            "/amazon", f"Imported {inserted} new order(s); {skipped} already known."
         )
     return {"inserted": inserted, "skipped": skipped}
 
@@ -410,11 +409,7 @@ def amazon_apply(order_id: int, request: Request) -> Any:
             row["seller"] or "Amazon", row["order_date"],
         )
     except HomeboxError as exc:
-        if _wants_html(request):
-            return RedirectResponse(
-                f"/amazon?flash=Homebox+error:+{str(exc)[:80]}&flash_type=err", status_code=303
-            )
-        raise HTTPException(502, str(exc)) from exc
+        return _fail(request, "/amazon", f"Homebox error: {str(exc)[:80]}", 502, str(exc))
 
     set_amazon_status(order_id, "applied")
     logger.info(
@@ -423,7 +418,7 @@ def amazon_apply(order_id: int, request: Request) -> Any:
     )
 
     if _wants_html(request):
-        return RedirectResponse("/amazon?flash=Purchase+data+applied&flash_type=ok", status_code=303)
+        return _flash_redirect("/amazon", "Purchase data applied")
     return {"result": "applied"}
 
 
@@ -434,28 +429,31 @@ def amazon_skip(order_id: int, request: Request) -> Any:
         raise HTTPException(404, "Order not found")
     set_amazon_status(order_id, "skipped")
     if _wants_html(request):
-        return RedirectResponse("/amazon", status_code=303)
+        return _flash_redirect("/amazon", "Order skipped")
     return {"result": "skipped"}
+
+
+def _parse_id_list(ids: str) -> list[int]:
+    return [int(i) for i in ids.split(",") if i.strip().isdigit()]
 
 
 @app.post("/api/amazon/bulk-skip")
 def amazon_bulk_skip(request: Request, ids: str = Form(...)) -> Any:
     """Skip all order IDs in the comma-separated ``ids`` field."""
-    order_ids = [int(i) for i in ids.split(",") if i.strip().isdigit()]
+    order_ids = _parse_id_list(ids)
     for oid in order_ids:
         set_amazon_status(oid, "skipped")
     if _wants_html(request):
-        return RedirectResponse(f"/amazon?flash=Skipped+{len(order_ids)}+order(s)&flash_type=ok", status_code=303)
+        return _flash_redirect("/amazon", f"Skipped {len(order_ids)} order(s)")
     return {"result": "skipped", "count": len(order_ids)}
 
 
 @app.post("/api/amazon/bulk-apply")
 def amazon_bulk_apply(request: Request, ids: str = Form(...)) -> Any:
     """Apply price to all matched+priced orders in the comma-separated ``ids`` field."""
-    order_ids = [int(i) for i in ids.split(",") if i.strip().isdigit()]
     applied = skipped = 0
     hb = HomeboxClient()
-    for oid in order_ids:
+    for oid in _parse_id_list(ids):
         row = get_amazon_order(oid)
         if not row or not row["homebox_id"] or not row["unit_price"]:
             skipped += 1
@@ -471,10 +469,8 @@ def amazon_bulk_apply(request: Request, ids: str = Form(...)) -> Any:
             logger.error("bulk-apply failed for order %d: %s", oid, exc)
             skipped += 1
     if _wants_html(request):
-        msg = f"Applied+{applied}+order(s)"
-        if skipped:
-            msg += f",+{skipped}+skipped"
-        return RedirectResponse(f"/amazon?flash={msg}&flash_type=ok", status_code=303)
+        msg = f"Applied {applied} order(s)" + (f", {skipped} skipped" if skipped else "")
+        return _flash_redirect("/amazon", msg)
     return {"result": "ok", "applied": applied, "skipped": skipped}
 
 
@@ -487,20 +483,15 @@ def amazon_bulk_create(request: Request, ids: str = Form(...)) -> Any:
     The user can re-file them into proper locations afterwards. Purchase price /
     seller / date are set with a follow-up PUT (ItemCreate doesn't accept them).
     """
-    order_ids = [int(i) for i in ids.split(",") if i.strip().isdigit()]
     created = skipped = 0
     hb = HomeboxClient()
     try:
         location_id = hb.get_or_create_location("Amazon Imports")
     except HomeboxError as exc:
         logger.error("bulk-create could not resolve location: %s", exc)
-        if _wants_html(request):
-            return RedirectResponse(
-                f"/amazon?flash=Homebox+error:+{str(exc)[:80]}&flash_type=err", status_code=303
-            )
-        raise HTTPException(502, str(exc)) from exc
+        return _fail(request, "/amazon", f"Homebox error: {str(exc)[:80]}", 502, str(exc))
 
-    for oid in order_ids:
+    for oid in _parse_id_list(ids):
         row = get_amazon_order(oid)
         if not row or row["homebox_id"]:
             skipped += 1
@@ -521,10 +512,8 @@ def amazon_bulk_create(request: Request, ids: str = Form(...)) -> Any:
             logger.error("bulk-create failed for order %d: %s", oid, exc)
             skipped += 1
     if _wants_html(request):
-        msg = f"Created+{created}+item(s)+in+Homebox"
-        if skipped:
-            msg += f",+{skipped}+failed"
-        return RedirectResponse(f"/amazon?flash={msg}&flash_type=ok", status_code=303)
+        msg = f"Created {created} item(s) in Homebox" + (f", {skipped} failed" if skipped else "")
+        return _flash_redirect("/amazon", msg)
     return {"result": "ok", "created": created, "skipped": skipped}
 
 
@@ -537,5 +526,5 @@ def amazon_bulk_create(request: Request, ids: str = Form(...)) -> Any:
 async def api_sweep(request: Request) -> Any:
     counts = await run_sweep()
     if _wants_html(request):
-        return RedirectResponse("/?flash=Sweep+complete&flash_type=ok", status_code=303)
+        return _flash_redirect("/", "Sweep complete")
     return {"result": "ok", **counts}
