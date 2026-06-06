@@ -251,16 +251,8 @@ def test_amazon_apply_writes_to_homebox(client):
     row = db.list_amazon_orders()[0]
     db.set_amazon_match(row["id"], "hb-sony", 0.85)
 
-    fake_item = {
-        "id": "hb-sony", "name": "Sony WH-1000XM5", "description": "",
-        "assetId": "", "quantity": 1, "insured": False, "archived": False,
-        "notes": "", "manufacturer": "Sony", "modelNumber": "", "serialNumber": "",
-        "purchaseFrom": "", "purchasePrice": 0, "location": None,
-        "tags": [], "parent": None,
-    }
     with patch("app.main.HomeboxClient") as mock_hb:
-        mock_hb.return_value.get_item.return_value = fake_item
-        mock_hb.return_value.put_item = MagicMock()
+        mock_hb.return_value.apply_item_purchase = MagicMock()
         resp = client.post(
             f"/api/amazon/{row['id']}/apply",
             headers={"accept": "application/json"},
@@ -269,10 +261,12 @@ def test_amazon_apply_writes_to_homebox(client):
     assert resp.status_code == 200
     assert resp.json()["result"] == "applied"
 
-    # Confirm the PUT was called with the right price and purchaseFrom.
-    put_payload = mock_hb.return_value.put_item.call_args[0][1]
-    assert put_payload["purchasePrice"] == 399.0
-    assert put_payload["purchaseFrom"] == "Amazon AU"
+    # Confirm the helper was called with the right item, price, seller and date.
+    args = mock_hb.return_value.apply_item_purchase.call_args[0]
+    assert args[0] == "hb-sony"
+    assert args[1] == 399.0
+    assert args[2] == "Amazon AU"
+    assert args[3] == "2024-03-15"
 
     # Status updated in DB.
     updated = db.get_amazon_order(row["id"])
@@ -302,3 +296,70 @@ def test_amazon_import_bad_csv(client):
         headers={"accept": "application/json"},
     )
     assert resp.status_code == 400
+
+
+def test_amazon_bulk_skip(client):
+    from app import db
+    db.upsert_amazon_orders([
+        {"order_id": "B1", "order_date": "2024-01-01", "asin": "B1A",
+         "title": "Thing One", "quantity": 1, "unit_price": 10.0,
+         "currency": "AUD", "seller": "Amazon"},
+        {"order_id": "B2", "order_date": "2024-01-02", "asin": "B2A",
+         "title": "Thing Two", "quantity": 1, "unit_price": 20.0,
+         "currency": "AUD", "seller": "Amazon"},
+    ])
+    rows = db.list_amazon_orders()
+    ids = ",".join(str(r["id"]) for r in rows)
+    resp = client.post(
+        "/api/amazon/bulk-skip",
+        data={"ids": ids},
+        headers={"accept": "application/json"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["count"] == 2
+    for r in rows:
+        assert db.get_amazon_order(r["id"])["status"] == "skipped"
+
+
+def test_amazon_bulk_create_uses_location_and_sets_price(client):
+    """Unmatched orders are created in an 'Amazon Imports' location, then priced.
+
+    Regression guard: ItemCreate must NOT receive a null locationId or
+    purchase fields — that 500s Homebox. create_item gets (name, location_id,
+    quantity); purchase data is applied via a separate apply_item_purchase().
+    """
+    from app import db
+    db.upsert_amazon_orders([{
+        "order_id": "C1", "order_date": "2024-05-05", "asin": "C1A",
+        "title": "Orphan Gadget", "quantity": 2, "unit_price": 75.0,
+        "currency": "AUD", "seller": "Amazon AU",
+    }])
+    row = db.list_amazon_orders()[0]
+
+    with patch("app.main.HomeboxClient") as mock_hb:
+        inst = mock_hb.return_value
+        inst.get_or_create_location.return_value = "loc-amz"
+        inst.create_item.return_value = {"id": "new-item-1"}
+        inst.apply_item_purchase = MagicMock()
+        resp = client.post(
+            "/api/amazon/bulk-create",
+            data={"ids": str(row["id"])},
+            headers={"accept": "application/json"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["created"] == 1
+
+    inst.get_or_create_location.assert_called_once_with("Amazon Imports")
+    # create_item called with name + the resolved location id + quantity.
+    c_args, c_kwargs = inst.create_item.call_args
+    assert c_args[0] == "Orphan Gadget"
+    assert c_args[1] == "loc-amz"
+    # purchase applied to the new item.
+    p_args = inst.apply_item_purchase.call_args[0]
+    assert p_args[0] == "new-item-1"
+    assert p_args[1] == 75.0
+
+    updated = db.get_amazon_order(row["id"])
+    assert updated["status"] == "applied"
+    assert updated["homebox_id"] == "new-item-1"
