@@ -168,19 +168,25 @@
     </div>
   {% endif %}
 
-  {# ── Bulk actions form wrapping the table ── #}
-  <form id="bulk-form" method="post" action="/api/amazon/bulk-skip">
+  {# ── Bulk actions ──
+     The per-row Apply/Skip forms live inside the table, so the table must NOT
+     be wrapped in another <form> (nested forms are invalid HTML — the browser
+     drops the inner tags and a row button ends up submitting the outer bulk
+     form). The bulk form is therefore standalone; submitBulk() copies the
+     selected ids into its hidden field and posts it. #}
+  <form id="bulk-form" method="post" action="/api/amazon/bulk-skip" style="display:none">
     <input type="hidden" name="ids" id="bulk-ids">
+  </form>
 
-    <div class="bulk-bar">
-      <span class="sel-count" id="sel-count">0 selected</span>
-      <button type="button" class="btn btn-skip" id="btn-bulk-skip" disabled
-              onclick="submitBulk('/api/amazon/bulk-skip')">✗ Skip selected</button>
-      <button type="button" class="btn btn-apply" id="btn-bulk-apply" disabled
-              onclick="submitBulk('/api/amazon/bulk-apply')">✓ Apply selected</button>
-      <button type="button" class="btn btn-create" id="btn-bulk-create" disabled
-              onclick="submitBulk('/api/amazon/bulk-create')">＋ Create in Homebox</button>
-    </div>
+  <div class="bulk-bar">
+    <span class="sel-count" id="sel-count">0 selected</span>
+    <button type="button" class="btn btn-skip" id="btn-bulk-skip" disabled
+            onclick="submitBulk('/api/amazon/bulk-skip')">✗ Skip selected</button>
+    <button type="button" class="btn btn-apply" id="btn-bulk-apply" disabled
+            onclick="submitBulk('/api/amazon/bulk-apply')">✓ Apply selected</button>
+    <button type="button" class="btn btn-create" id="btn-bulk-create" disabled
+            onclick="submitBulk('/api/amazon/bulk-create')">＋ Create in Homebox</button>
+  </div>
 
     <table>
       <thead>
@@ -234,7 +240,6 @@
       {% endfor %}
       </tbody>
     </table>
-  </form>
 
   {% else %}
     <div style="color:#888;padding:32px 0;text-align:center">
