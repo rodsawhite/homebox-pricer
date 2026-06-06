@@ -321,6 +321,22 @@ def test_amazon_bulk_skip(client):
         assert db.get_amazon_order(r["id"])["status"] == "skipped"
 
 
+def test_amazon_bulk_actions_empty_selection_no_422(client):
+    """A bulk POST with no/empty ids must not 422 — it's a graceful no-op."""
+    for path in ("bulk-skip", "bulk-apply", "bulk-create"):
+        # Field omitted entirely.
+        resp = client.post(
+            f"/api/amazon/{path}", headers={"accept": "application/json"}
+        )
+        assert resp.status_code == 200, f"{path} omitted ids"
+        # Field present but empty.
+        resp = client.post(
+            f"/api/amazon/{path}", data={"ids": ""},
+            headers={"accept": "application/json"},
+        )
+        assert resp.status_code == 200, f"{path} empty ids"
+
+
 def test_amazon_bulk_create_uses_location_and_sets_price(client):
     """Unmatched orders are created in an 'Amazon Imports' location, then priced.
 

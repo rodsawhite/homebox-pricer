@@ -434,13 +434,22 @@ def amazon_skip(order_id: int, request: Request) -> Any:
 
 
 def _parse_id_list(ids: str) -> list[int]:
-    return [int(i) for i in ids.split(",") if i.strip().isdigit()]
+    return [int(i) for i in (ids or "").split(",") if i.strip().isdigit()]
+
+
+def _bulk_nothing_selected(request: Request) -> Any:
+    """Graceful no-op when a bulk action is submitted with nothing selected."""
+    if _wants_html(request):
+        return _flash_redirect("/amazon", "Nothing selected", ok=False)
+    return {"result": "ok", "count": 0}
 
 
 @app.post("/api/amazon/bulk-skip")
-def amazon_bulk_skip(request: Request, ids: str = Form(...)) -> Any:
+def amazon_bulk_skip(request: Request, ids: str = Form("")) -> Any:
     """Skip all order IDs in the comma-separated ``ids`` field."""
     order_ids = _parse_id_list(ids)
+    if not order_ids:
+        return _bulk_nothing_selected(request)
     for oid in order_ids:
         set_amazon_status(oid, "skipped")
     if _wants_html(request):
@@ -449,8 +458,10 @@ def amazon_bulk_skip(request: Request, ids: str = Form(...)) -> Any:
 
 
 @app.post("/api/amazon/bulk-apply")
-def amazon_bulk_apply(request: Request, ids: str = Form(...)) -> Any:
+def amazon_bulk_apply(request: Request, ids: str = Form("")) -> Any:
     """Apply price to all matched+priced orders in the comma-separated ``ids`` field."""
+    if not _parse_id_list(ids):
+        return _bulk_nothing_selected(request)
     applied = skipped = 0
     hb = HomeboxClient()
     for oid in _parse_id_list(ids):
@@ -475,7 +486,7 @@ def amazon_bulk_apply(request: Request, ids: str = Form(...)) -> Any:
 
 
 @app.post("/api/amazon/bulk-create")
-def amazon_bulk_create(request: Request, ids: str = Form(...)) -> Any:
+def amazon_bulk_create(request: Request, ids: str = Form("")) -> Any:
     """Create unmatched orders as new Homebox items in an "Amazon Imports" location.
 
     Homebox items require a real location (a null locationId 500s), so we route
@@ -483,6 +494,8 @@ def amazon_bulk_create(request: Request, ids: str = Form(...)) -> Any:
     The user can re-file them into proper locations afterwards. Purchase price /
     seller / date are set with a follow-up PUT (ItemCreate doesn't accept them).
     """
+    if not _parse_id_list(ids):
+        return _bulk_nothing_selected(request)
     created = skipped = 0
     hb = HomeboxClient()
     try:
