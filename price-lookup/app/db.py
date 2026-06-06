@@ -208,15 +208,24 @@ def refresh_candidate(
         )
 
 
-def count_by_status() -> dict[str, int]:
+def _count_by_status(table: str, defaults: dict[str, int]) -> dict[str, int]:
+    """Group-count rows by their ``status`` column, seeded with zeroed defaults.
+
+    ``table`` is a trusted internal constant (never user input), so interpolating
+    it into the query is safe here.
+    """
     with get_conn() as conn:
         rows = conn.execute(
-            "SELECT status, COUNT(*) as n FROM price_candidates GROUP BY status"
+            f"SELECT status, COUNT(*) as n FROM {table} GROUP BY status"
         ).fetchall()
-    counts: dict[str, int] = {"pending": 0, "applied": 0, "rejected": 0}
+    counts = dict(defaults)
     for row in rows:
         counts[row["status"]] = row["n"]
     return counts
+
+
+def count_by_status() -> dict[str, int]:
+    return _count_by_status("price_candidates", {"pending": 0, "applied": 0, "rejected": 0})
 
 
 def upsert_amazon_orders(orders: list[dict]) -> tuple[int, int]:
@@ -282,14 +291,9 @@ def set_amazon_status(order_id: int, status: str) -> None:
 
 
 def count_amazon_by_status() -> dict[str, int]:
-    with get_conn() as conn:
-        rows = conn.execute(
-            "SELECT status, COUNT(*) as n FROM amazon_orders GROUP BY status"
-        ).fetchall()
-    counts: dict[str, int] = {"unmatched": 0, "matched": 0, "applied": 0, "skipped": 0}
-    for row in rows:
-        counts[row["status"]] = row["n"]
-    return counts
+    return _count_by_status(
+        "amazon_orders", {"unmatched": 0, "matched": 0, "applied": 0, "skipped": 0}
+    )
 
 
 def pending_homebox_ids() -> set[str]:

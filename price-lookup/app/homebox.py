@@ -136,6 +136,47 @@ class HomeboxClient:
             return True
         return False
 
+    def _request(
+        self,
+        method: str,
+        path: str,
+        what: str,
+        *,
+        params: dict | None = None,
+        json_body: dict | None = None,
+        ok: tuple[int, ...] = (200,),
+        timeout: float = 10,
+    ) -> httpx.Response:
+        """Issue an authenticated Homebox request with retry + 401-refresh.
+
+        Wraps the transient-failure retry (_retry_request) with one extra
+        attempt that re-logs in on a 401 and replays the call. Raises
+        HomeboxAuthError on an unrecoverable 401 and HomeboxError on any other
+        status outside ``ok``. Returns the raw response so callers decide how to
+        decode it.
+        """
+        url = f"{self._base}{path}"
+        send = getattr(httpx, method.lower())  # httpx.get / put / post
+        # httpx.get takes no json= kwarg; only include the kwargs that apply.
+        kwargs: dict = {"timeout": timeout}
+        if params is not None:
+            kwargs["params"] = params
+        if json_body is not None:
+            kwargs["json"] = json_body
+        for attempt in range(2):
+            resp = _retry_request(
+                lambda: send(url, headers=self._auth_header(), **kwargs),
+                what=what,
+            )
+            if resp.status_code == 401:
+                if attempt == 0 and self._refresh_if_needed(401):
+                    continue
+                raise HomeboxAuthError(f"{what}: 401 (token expired, no credentials to refresh)")
+            if resp.status_code not in ok:
+                raise HomeboxError(f"{what}: {resp.status_code} {resp.text[:200]}")
+            return resp
+        raise HomeboxError(f"{what}: exhausted attempts")  # unreachable
+
     # ------------------------------------------------------------------
     # Items
     # ------------------------------------------------------------------
@@ -153,67 +194,31 @@ class HomeboxClient:
         return items
 
     def _get_items_page(self, page: int) -> list[dict[str, Any]]:
-        url = f"{self._base}/api/v1/items"
-        params = {"page": page, "pageSize": 100}
-        what = f"list_items page={page}"
-        for attempt in range(2):
-            resp = _retry_request(
-                lambda: httpx.get(url, headers=self._auth_header(), params=params, timeout=15),
-                what=what,
-            )
-            if resp.status_code == 401:
-                if attempt == 0 and self._refresh_if_needed(401):
-                    continue
-                raise HomeboxAuthError(f"{what}: 401 (token expired, no credentials to refresh)")
-            if resp.status_code != 200:
-                raise HomeboxError(f"{what}: {resp.status_code} {resp.text[:200]}")
-            data = resp.json()
-            # Homebox wraps paginated results in {"items": [...], "total": N}
-            # Fall back to a bare list for forward compat.
-            if isinstance(data, list):
-                return data
-            return data.get("items", [])
-        return []  # unreachable, satisfies type checker
+        resp = self._request(
+            "GET", "/api/v1/items", f"list_items page={page}",
+            params={"page": page, "pageSize": 100}, timeout=15,
+        )
+        data = resp.json()
+        # Homebox wraps paginated results in {"items": [...], "total": N};
+        # fall back to a bare list for forward compat.
+        return data if isinstance(data, list) else data.get("items", [])
 
     def get_item(self, item_id: str) -> dict[str, Any]:
-        url = f"{self._base}/api/v1/items/{item_id}"
-        what = f"get_item {item_id}"
-        for attempt in range(2):
-            resp = _retry_request(
-                lambda: httpx.get(url, headers=self._auth_header(), timeout=10),
-                what=what,
-            )
-            if resp.status_code == 401:
-                if attempt == 0 and self._refresh_if_needed(401):
-                    continue
-                raise HomeboxAuthError(f"{what}: 401 (token expired, no credentials to refresh)")
-            if resp.status_code != 200:
-                raise HomeboxError(f"{what}: {resp.status_code} {resp.text[:200]}")
-            return resp.json()
-        return {}  # unreachable
+        resp = self._request("GET", f"/api/v1/items/{item_id}", f"get_item {item_id}")
+        return resp.json()
 
     def put_item(self, item_id: str, item: dict[str, Any]) -> None:
         """Write the full item object back (read-modify-write pattern)."""
-        url = f"{self._base}/api/v1/items/{item_id}"
-        what = f"put_item {item_id}"
         logger.info("PUT %s body=%s", item_id, json.dumps(item))
-        for attempt in range(2):
-            resp = _retry_request(
-                lambda: httpx.put(url, headers=self._auth_header(), json=item, timeout=10),
-                what=what,
+        try:
+            self._request(
+                "PUT", f"/api/v1/items/{item_id}", f"put_item {item_id}",
+                json_body=item, ok=(200, 204),
             )
-            if resp.status_code == 401:
-                if attempt == 0 and self._refresh_if_needed(401):
-                    continue
-                raise HomeboxAuthError(f"{what}: 401 (token expired, no credentials to refresh)")
-            if resp.status_code not in (200, 204):
-                # Log both sides so we can see exactly which field Homebox rejects.
-                logger.error(
-                    "PUT %s failed: %s %s — sent body: %s",
-                    item_id, resp.status_code, resp.text[:500], json.dumps(item),
-                )
-                raise HomeboxError(f"{what}: {resp.status_code} {resp.text[:200]}")
-            return
+        except HomeboxError:
+            # Log both sides so we can see exactly which field Homebox rejects.
+            logger.error("PUT %s failed — sent body: %s", item_id, json.dumps(item))
+            raise
 
     def create_item(self, name: str, location_id: str, quantity: int = 1) -> dict[str, Any]:
         """POST a new item using the ItemCreate schema.
@@ -226,64 +231,31 @@ class HomeboxClient:
         location foreign key. Callers must pass a real location id, then set
         purchase fields with a follow-up apply_price()/put_item().
         """
-        url = f"{self._base}/api/v1/items"
-        what = "create_item"
         payload = {"name": name, "quantity": quantity, "locationId": location_id}
-        for attempt in range(2):
-            resp = _retry_request(
-                lambda: httpx.post(url, headers=self._auth_header(), json=payload, timeout=10),
-                what=what,
+        try:
+            resp = self._request(
+                "POST", "/api/v1/items", "create_item", json_body=payload, ok=(200, 201),
             )
-            if resp.status_code == 401:
-                if attempt == 0 and self._refresh_if_needed(401):
-                    continue
-                raise HomeboxAuthError(f"{what}: 401 (token expired, no credentials to refresh)")
-            if resp.status_code not in (200, 201):
-                logger.error("create_item failed: %s %s — sent %s",
-                             resp.status_code, resp.text[:300], json.dumps(payload))
-                raise HomeboxError(f"{what}: {resp.status_code} {resp.text[:200]}")
-            return resp.json()
-        return {}
+        except HomeboxError:
+            logger.error("create_item failed — sent %s", json.dumps(payload))
+            raise
+        return resp.json()
 
     # ------------------------------------------------------------------
     # Locations
     # ------------------------------------------------------------------
 
     def list_locations(self) -> list[dict[str, Any]]:
-        url = f"{self._base}/api/v1/locations"
-        what = "list_locations"
-        for attempt in range(2):
-            resp = _retry_request(
-                lambda: httpx.get(url, headers=self._auth_header(), timeout=10),
-                what=what,
-            )
-            if resp.status_code == 401:
-                if attempt == 0 and self._refresh_if_needed(401):
-                    continue
-                raise HomeboxAuthError(f"{what}: 401 (token expired, no credentials to refresh)")
-            if resp.status_code != 200:
-                raise HomeboxError(f"{what}: {resp.status_code} {resp.text[:200]}")
-            data = resp.json()
-            return data if isinstance(data, list) else data.get("items", [])
-        return []
+        resp = self._request("GET", "/api/v1/locations", "list_locations")
+        data = resp.json()
+        return data if isinstance(data, list) else data.get("items", [])
 
     def create_location(self, name: str, description: str = "") -> dict[str, Any]:
-        url = f"{self._base}/api/v1/locations"
-        what = "create_location"
-        payload = {"name": name, "description": description}
-        for attempt in range(2):
-            resp = _retry_request(
-                lambda: httpx.post(url, headers=self._auth_header(), json=payload, timeout=10),
-                what=what,
-            )
-            if resp.status_code == 401:
-                if attempt == 0 and self._refresh_if_needed(401):
-                    continue
-                raise HomeboxAuthError(f"{what}: 401 (token expired, no credentials to refresh)")
-            if resp.status_code not in (200, 201):
-                raise HomeboxError(f"{what}: {resp.status_code} {resp.text[:200]}")
-            return resp.json()
-        return {}
+        resp = self._request(
+            "POST", "/api/v1/locations", "create_location",
+            json_body={"name": name, "description": description}, ok=(200, 201),
+        )
+        return resp.json()
 
     def get_or_create_location(self, name: str) -> str:
         """Return the id of the location named ``name``, creating it if absent."""
