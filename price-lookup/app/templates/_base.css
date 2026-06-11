@@ -1,0 +1,174 @@
+/* Shared design system for the price-lookup UI.
+   Each template pulls this into its <style> block with a Jinja include, so
+   there's a single source of truth without needing a static-files mount.
+   NOTE: this file is rendered through Jinja — avoid literal Jinja delimiter
+   sequences (curly brace followed by percent/brace/hash) anywhere in it.
+   Light/dark themes via CSS variables + prefers-color-scheme. */
+
+:root {
+  --bg:           #f4f5f7;
+  --surface:      #ffffff;
+  --surface-2:    #f8f9fa;
+  --border:       #e2e4e8;
+  --border-soft:  #f0f0f2;
+  --text:         #1d2129;
+  --text-2:       #555b66;
+  --text-3:       #8a909b;
+  --header-bg:    #1a1a2e;
+  --header-text:  #e8e8f0;
+  --header-link:  #a0a8cc;
+  --accent:       #0d6efd;
+  --accent-hover: #0b5ed7;
+  --green:        #198754;
+  --green-hover:  #146c43;
+  --red:          #dc3545;
+  --red-hover:    #b02a37;
+  --grey-btn:     #6c757d;
+  --grey-btn-hover: #565e64;
+  --amber:        #ff9900;
+  --amber-hover:  #e68a00;
+  --price:        #0a3d62;
+  --link:         #0066cc;
+  --ok-bg:  #d1e7dd; --ok-fg:  #0f5132;
+  --err-bg: #f8d7da; --err-fg: #842029;
+  --warn-bg:#fff3cd; --warn-fg:#856404;
+  --info-bg:#cff4fc; --info-fg:#055160;
+  --mute-bg:#e2e3e5; --mute-fg:#41464b;
+  --shadow:    0 1px 2px rgba(15, 20, 40, .05);
+  --shadow-md: 0 4px 14px rgba(15, 20, 40, .10);
+  --radius: 10px;
+  --sel-bg: #eaf2ff;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:           #14151a;
+    --surface:      #1e2027;
+    --surface-2:    #23252e;
+    --border:       #32343e;
+    --border-soft:  #2a2c35;
+    --text:         #e6e7eb;
+    --text-2:       #a8adb8;
+    --text-3:       #6f7480;
+    --header-bg:    #0e0f1a;
+    --header-text:  #e8e8f0;
+    --header-link:  #8e96c2;
+    --price:        #7db8e8;
+    --link:         #6ab0f3;
+    --ok-bg:  #11321f; --ok-fg:  #6fcf97;
+    --err-bg: #3a1418; --err-fg: #f1939c;
+    --warn-bg:#332a10; --warn-fg:#e8c66b;
+    --info-bg:#0e2b33; --info-fg:#7fd6ec;
+    --mute-bg:#2b2d35; --mute-fg:#a8adb8;
+    --shadow:    0 1px 2px rgba(0, 0, 0, .35);
+    --shadow-md: 0 4px 16px rgba(0, 0, 0, .45);
+    --sel-bg: #1b2a45;
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { color-scheme: light dark; }
+
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 15px;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ── Header / nav ─────────────────────────────────────────────────────── */
+header {
+  background: var(--header-bg);
+  color: var(--header-text);
+  padding: 14px clamp(14px, 3vw, 24px);
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; flex-wrap: wrap;
+  position: sticky; top: 0; z-index: 50;
+  box-shadow: var(--shadow-md);
+}
+header h1 { font-size: 1.1rem; font-weight: 600; white-space: nowrap; }
+header nav { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+header nav a, header nav button {
+  color: var(--header-link); text-decoration: none; font-size: 0.85rem;
+  padding: 7px 10px; border-radius: 6px;
+  background: none; border: none; cursor: pointer; font-family: inherit;
+  transition: color .15s ease, background-color .15s ease;
+}
+header nav a:hover, header nav button:hover { color: #fff; background: rgba(255,255,255,.08); }
+header nav a.active { color: #fff; font-weight: 600; background: rgba(255,255,255,.12); }
+
+/* ── Flash messages ───────────────────────────────────────────────────── */
+.flash {
+  padding: 11px clamp(14px, 3vw, 24px);
+  font-size: 0.88rem;
+  animation: flash-in .25s ease-out, flash-out .5s ease-in 4.5s forwards;
+}
+.flash-ok  { background: var(--ok-bg);  color: var(--ok-fg); }
+.flash-err { background: var(--err-bg); color: var(--err-fg); animation: flash-in .25s ease-out; }
+@keyframes flash-in  { from { opacity: 0; transform: translateY(-8px); } }
+@keyframes flash-out { to   { opacity: 0; height: 0; padding-top: 0; padding-bottom: 0; overflow: hidden; } }
+
+/* ── Badges ───────────────────────────────────────────────────────────── */
+.badge {
+  display: inline-block; padding: 2px 9px; border-radius: 99px;
+  font-size: 0.73rem; font-weight: 600; white-space: nowrap;
+}
+.badge-pending, .badge-medium      { background: var(--warn-bg); color: var(--warn-fg); }
+.badge-applied, .badge-high        { background: var(--ok-bg);   color: var(--ok-fg); }
+.badge-rejected, .badge-low,
+.badge-skipped                     { background: var(--err-bg);  color: var(--err-fg); }
+.badge-matched                     { background: var(--info-bg); color: var(--info-fg); }
+.badge-unmatched                   { background: var(--mute-bg); color: var(--mute-fg); }
+
+/* ── Buttons ──────────────────────────────────────────────────────────── */
+.btn {
+  padding: 7px 14px; border: none; border-radius: 7px;
+  font-size: 0.84rem; font-weight: 600; cursor: pointer; white-space: nowrap;
+  font-family: inherit;
+  transition: background-color .15s ease, transform .1s ease, box-shadow .15s ease, opacity .15s ease;
+}
+.btn:hover:not(:disabled) { box-shadow: var(--shadow-md); }
+.btn:active:not(:disabled) { transform: scale(.97); }
+.btn:disabled { opacity: 0.4; cursor: default; }
+.btn-approve, .btn-apply { background: var(--green); color: #fff; }
+.btn-approve:hover:not(:disabled), .btn-apply:hover:not(:disabled) { background: var(--green-hover); }
+.btn-reject { background: var(--red); color: #fff; }
+.btn-reject:hover:not(:disabled) { background: var(--red-hover); }
+.btn-skip { background: var(--grey-btn); color: #fff; }
+.btn-skip:hover:not(:disabled) { background: var(--grey-btn-hover); }
+.btn-edit, .btn-create, .btn-primary { background: var(--accent); color: #fff; }
+.btn-edit:hover:not(:disabled), .btn-create:hover:not(:disabled),
+.btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+.btn-upload { background: var(--amber); color: #181818; }
+.btn-upload:hover:not(:disabled) { background: var(--amber-hover); }
+
+/* ── Inputs ───────────────────────────────────────────────────────────── */
+input[type=text], input[type=number] {
+  padding: 7px 10px; border: 1px solid var(--border); border-radius: 7px;
+  font-size: 0.85rem; font-family: inherit;
+  background: var(--surface); color: var(--text);
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+input[type=text]:focus, input[type=number]:focus {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+input[type=checkbox] { width: 17px; height: 17px; cursor: pointer; accent-color: var(--accent); }
+
+main { padding: clamp(14px, 3vw, 24px); }
+
+a { color: var(--link); }
+
+/* ── Motion preferences ───────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+
+/* Mobile: comfier touch targets */
+@media (max-width: 720px) {
+  .btn { padding: 10px 16px; font-size: 0.9rem; }
+  input[type=checkbox] { width: 21px; height: 21px; }
+  input[type=text], input[type=number] { padding: 10px 12px; font-size: 16px; } /* 16px stops iOS zoom-on-focus */
+}

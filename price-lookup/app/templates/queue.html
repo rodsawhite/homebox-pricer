@@ -5,100 +5,85 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Price Review Queue</title>
   <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: system-ui, sans-serif; font-size: 15px; background: #f5f5f5; color: #222; }
+    {% include "_base.css" %}
 
-    header {
-      background: #1a1a2e; color: #eee; padding: 14px 24px;
-      display: flex; align-items: center; justify-content: space-between;
-    }
-    header h1 { font-size: 1.15rem; font-weight: 600; }
-    header nav a { color: #aac; text-decoration: none; margin-left: 18px; font-size: 0.85rem; }
-    header nav a:hover { color: #fff; }
-
+    /* ── Page-specific: review queue ── */
     .sweep-bar {
-      background: #fff; border-bottom: 1px solid #ddd;
-      padding: 8px 24px; font-size: 0.82rem; color: #555;
-      display: flex; gap: 24px; align-items: center; flex-wrap: wrap;
+      background: var(--surface); border-bottom: 1px solid var(--border);
+      padding: 8px clamp(14px, 3vw, 24px); font-size: 0.82rem; color: var(--text-2);
+      display: flex; gap: 18px; align-items: center; flex-wrap: wrap;
     }
-    .sweep-bar strong { color: #222; }
-    .badge {
-      display: inline-block; padding: 2px 8px; border-radius: 99px;
-      font-size: 0.75rem; font-weight: 600;
-    }
-    .badge-pending  { background: #fff3cd; color: #856404; }
-    .badge-applied  { background: #d1e7dd; color: #0f5132; }
-    .badge-rejected { background: #f8d7da; color: #842029; }
-    .badge-high     { background: #d1e7dd; color: #0f5132; }
-    .badge-medium   { background: #fff3cd; color: #856404; }
-    .badge-low      { background: #f8d7da; color: #842029; }
+    .sweep-bar strong { color: var(--text); }
 
-    main { padding: 24px; }
-
-    .empty { text-align: center; padding: 64px 0; color: #888; }
+    .empty { text-align: center; padding: 64px 0; color: var(--text-3); }
     .empty p { margin-top: 8px; font-size: 0.9rem; }
 
     .card-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr));
       gap: 16px;
     }
     .card {
-      background: #fff; border: 1px solid #e0e0e0; border-radius: 8px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); box-shadow: var(--shadow);
       overflow: hidden; display: flex; flex-direction: column;
+      transition: box-shadow .2s ease, transform .2s ease;
+      animation: card-in .3s ease-out backwards;
     }
+    .card:hover { box-shadow: var(--shadow-md); transform: translateY(-2px); }
+    @keyframes card-in { from { opacity: 0; transform: translateY(10px); } }
+    /* Stagger the first few cards on load */
+    .card:nth-child(1) { animation-delay: .02s; }
+    .card:nth-child(2) { animation-delay: .06s; }
+    .card:nth-child(3) { animation-delay: .10s; }
+    .card:nth-child(4) { animation-delay: .14s; }
+    .card:nth-child(5) { animation-delay: .18s; }
+    .card:nth-child(6) { animation-delay: .22s; }
+
     .card-thumb {
-      width: 100%; height: 160px; object-fit: cover; background: #f0f0f0;
+      width: 100%; height: 160px; object-fit: cover; background: var(--surface-2);
       display: flex; align-items: center; justify-content: center;
-      color: #bbb; font-size: 2rem;
+      color: var(--text-3); font-size: 2rem;
     }
     .card-thumb img { width: 100%; height: 100%; object-fit: cover; }
     .card-body { padding: 14px 16px; flex: 1; display: flex; flex-direction: column; gap: 8px; }
     .card-title { font-weight: 600; font-size: 0.95rem; }
-    .card-query { font-size: 0.78rem; color: #777; word-break: break-all; }
-    .card-price { font-size: 1.15rem; font-weight: 700; color: #0a3d62; }
-    .card-reason { font-size: 0.8rem; color: #555; }
+    .card-query { font-size: 0.78rem; color: var(--text-3); word-break: break-word; }
+    .card-price { font-size: 1.15rem; font-weight: 700; color: var(--price); }
+    .card-reason { font-size: 0.8rem; color: var(--text-2); }
     .card-source { font-size: 0.78rem; }
-    .card-source a { color: #0066cc; word-break: break-all; }
+    .card-source a { word-break: break-all; }
 
-    .card-actions { padding: 12px 16px; border-top: 1px solid #eee; display: flex; flex-direction: column; gap: 8px; }
-    .btn-row { display: flex; gap: 8px; }
-    .btn {
-      flex: 1; padding: 7px 0; border: none; border-radius: 5px;
-      font-size: 0.85rem; font-weight: 600; cursor: pointer;
+    .card-actions {
+      padding: 12px 16px; border-top: 1px solid var(--border-soft);
+      display: flex; flex-direction: column; gap: 8px;
+      background: var(--surface);
     }
-    .btn-approve { background: #198754; color: #fff; }
-    .btn-approve:hover { background: #146c43; }
-    .btn-reject  { background: #dc3545; color: #fff; }
-    .btn-reject:hover  { background: #b02a37; }
+    .btn-row { display: flex; gap: 8px; }
+    .btn-row .btn, .btn-row form { flex: 1; }
+    .btn-block { width: 100%; }
 
     .edit-row { display: flex; gap: 6px; }
-    .edit-row input[type=number] {
-      flex: 1; padding: 6px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 0.85rem;
-    }
-    .edit-row input[type=text] {
-      flex: 2; padding: 6px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 0.85rem;
-    }
-    .btn-edit { background: #0d6efd; color: #fff; padding: 6px 12px; white-space: nowrap; }
-    .btn-edit:hover { background: #0b5ed7; }
+    .edit-row input[type=number] { flex: 1; min-width: 0; }
+    .edit-row input[type=text]   { flex: 2; min-width: 0; }
 
-    .flash { padding: 10px 24px; font-size: 0.88rem; }
-    .flash-ok  { background: #d1e7dd; color: #0f5132; }
-    .flash-err { background: #f8d7da; color: #842029; }
+    @media (max-width: 720px) {
+      .card:hover { transform: none; }   /* no hover-lift on touch */
+      .edit-row { flex-wrap: wrap; }
+      .edit-row .btn { flex: 1 1 100%; }
+    }
   </style>
 </head>
 <body>
 
 <header>
-  <h1>🏷 Price Review Queue</h1>
+  <h1>🏷 Price Queue</h1>
   <nav>
-    <a href="/" style="color:#fff;font-weight:600">Price Queue</a>
+    <a href="/" class="active">Price Queue</a>
     <a href="/amazon">Amazon Import</a>
     <a href="/status">Status</a>
     <form method="post" action="/api/sweep" style="display:inline">
-      <button style="background:none;border:none;color:#aac;cursor:pointer;font-size:0.85rem;margin-left:18px">
-        ↺ Sweep now
-      </button>
+      <button>↺ Sweep now</button>
     </form>
   </nav>
 </header>
@@ -132,7 +117,7 @@
     <p>No pending candidates — nothing to review right now.</p>
     <p style="margin-top:16px">
       <form method="post" action="/api/sweep" style="display:inline">
-        <button class="btn btn-approve" style="padding:8px 20px">Run a sweep now</button>
+        <button class="btn btn-approve" style="padding:10px 22px">Run a sweep now</button>
       </form>
     </p>
   </div>
@@ -158,7 +143,7 @@
           {% if c.price is not none %}
             <span class="card-price">{{ "%.2f" | format(c.price) }} {{ c.currency }}</span>
           {% else %}
-            <span class="card-price" style="color:#aaa">No price found</span>
+            <span class="card-price" style="color:var(--text-3)">No price found</span>
           {% endif %}
           &nbsp;<span class="badge badge-{{ c.confidence }}">{{ c.confidence }}</span>
         </div>
@@ -177,14 +162,14 @@
       <div class="card-actions">
         {# Approve / Reject #}
         <div class="btn-row">
-          <form method="post" action="/api/candidates/{{ c.id }}/approve" style="flex:1">
-            <button class="btn btn-approve" style="width:100%"
+          <form method="post" action="/api/candidates/{{ c.id }}/approve">
+            <button class="btn btn-approve btn-block"
               {% if c.price is none %}disabled title="Edit in a price first"{% endif %}>
               ✓ Approve
             </button>
           </form>
-          <form method="post" action="/api/candidates/{{ c.id }}/reject" style="flex:1">
-            <button class="btn btn-reject" style="width:100%">✗ Reject</button>
+          <form method="post" action="/api/candidates/{{ c.id }}/reject">
+            <button class="btn btn-reject btn-block">✗ Reject</button>
           </form>
         </div>
 
@@ -193,14 +178,13 @@
           <div class="edit-row">
             <input type="text" name="query" value="{{ c.query | e }}"
               placeholder="Search text" style="flex:1">
-            <button type="submit" class="btn"
-              style="background:#0d6efd;color:#fff;font-size:0.8rem">🔍 Search</button>
+            <button type="submit" class="btn btn-primary">🔍 Search</button>
           </div>
         </form>
 
         {# Re-fetch item metadata from Homebox, then rebuild the query + search #}
         <form method="post" action="/api/candidates/{{ c.id }}/relookup">
-          <button type="submit" class="btn" style="width:100%;background:#6c757d;color:#fff;font-size:0.8rem">
+          <button type="submit" class="btn btn-skip btn-block">
             ↻ Re-fetch from Homebox
           </button>
         </form>
