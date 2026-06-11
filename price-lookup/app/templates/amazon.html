@@ -5,95 +5,125 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Amazon Import</title>
   <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: system-ui, sans-serif; font-size: 15px; background: #f5f5f5; color: #222; }
+    {% include "_base.css" %}
 
-    header {
-      background: #1a1a2e; color: #eee; padding: 14px 24px;
-      display: flex; align-items: center; justify-content: space-between;
-    }
-    header h1 { font-size: 1.15rem; font-weight: 600; }
-    header nav a { color: #aac; text-decoration: none; margin-left: 18px; font-size: 0.85rem; }
-    header nav a:hover { color: #fff; }
-    header nav a.active { color: #fff; border-bottom: 2px solid #fff; padding-bottom: 2px; }
-
-    .flash { padding: 10px 24px; font-size: 0.88rem; }
-    .flash-ok  { background: #d1e7dd; color: #0f5132; }
-    .flash-err { background: #f8d7da; color: #842029; }
-
-    main { padding: 24px; max-width: 1100px; }
+    /* ── Page-specific: Amazon import ── */
+    main { max-width: 1100px; }
 
     .section-title { font-size: 1rem; font-weight: 600; margin-bottom: 12px; }
 
     .upload-card {
-      background: #fff; border: 1px solid #e0e0e0; border-radius: 8px;
-      padding: 24px; margin-bottom: 28px; max-width: 560px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); box-shadow: var(--shadow);
+      padding: clamp(16px, 3vw, 24px); margin-bottom: 28px; max-width: 560px;
     }
-    .upload-card p { font-size: 0.88rem; color: #555; margin-bottom: 16px; line-height: 1.5; }
-    .upload-card ol { font-size: 0.88rem; color: #555; margin-left: 18px; margin-bottom: 16px; line-height: 1.8; }
+    .upload-card p { font-size: 0.88rem; color: var(--text-2); margin-bottom: 16px; line-height: 1.5; }
     .upload-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-    .upload-row input[type=file] { flex: 1; font-size: 0.88rem; }
+    .upload-row input[type=file] { flex: 1; font-size: 0.88rem; min-width: 0; color: var(--text-2); }
 
-    .stats-bar {
-      display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 20px;
+    .stats-bar { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+    .stat {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+      padding: 8px 18px; font-size: 0.82rem; color: var(--text-2);
+      box-shadow: var(--shadow); flex: 1 1 110px; text-align: center;
     }
-    .stat { background: #fff; border: 1px solid #e0e0e0; border-radius: 6px;
-            padding: 8px 18px; font-size: 0.88rem; }
-    .stat strong { font-size: 1.1rem; display: block; }
+    .stat strong { font-size: 1.15rem; display: block; color: var(--text); }
 
-    table { width: 100%; border-collapse: collapse; background: #fff;
-            border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden; }
-    th { background: #f8f9fa; text-align: left; padding: 9px 12px;
-         font-size: 0.82rem; color: #555; border-bottom: 1px solid #dee2e6; }
-    td { padding: 9px 12px; font-size: 0.85rem; border-bottom: 1px solid #f0f0f0;
-         vertical-align: middle; }
-    tr:last-child td { border-bottom: none; }
-    tr.status-applied { opacity: 0.55; }
-    tr.status-skipped { opacity: 0.45; }
-
-    .badge {
-      display: inline-block; padding: 2px 8px; border-radius: 99px;
-      font-size: 0.73rem; font-weight: 600; white-space: nowrap;
+    .filter-bar {
+      display: flex; gap: 4px; margin-bottom: 16px; flex-wrap: wrap; align-items: center;
+      font-size: 0.85rem; color: var(--text-2);
     }
-    .badge-matched   { background: #cff4fc; color: #055160; }
-    .badge-unmatched { background: #e2e3e5; color: #41464b; }
-    .badge-applied   { background: #d1e7dd; color: #0f5132; }
-    .badge-skipped   { background: #f8d7da; color: #842029; }
-
-    .score { font-size: 0.78rem; color: #777; }
-
-    .btn {
-      padding: 5px 12px; border: none; border-radius: 4px;
-      font-size: 0.82rem; font-weight: 600; cursor: pointer; white-space: nowrap;
+    .filter-bar a {
+      text-decoration: none; padding: 5px 11px; border-radius: 99px;
+      transition: background-color .15s ease, color .15s ease;
     }
-    .btn-apply  { background: #198754; color: #fff; }
-    .btn-apply:hover  { background: #146c43; }
-    .btn-skip   { background: #6c757d; color: #fff; }
-    .btn-skip:hover   { background: #565e64; }
-    .btn-upload { background: #ff9900; color: #111; }
-    .btn-upload:hover { background: #e68a00; }
-    .btn-create { background: #0d6efd; color: #fff; }
-    .btn-create:hover { background: #0b5ed7; }
-    .btn:disabled { opacity: 0.45; cursor: default; }
+    .filter-bar a:hover { background: var(--mute-bg); }
+    .filter-bar a.active { font-weight: 700; color: var(--text); background: var(--mute-bg); }
 
-    .match-name { font-weight: 500; }
-    .no-match   { color: #aaa; font-style: italic; font-size: 0.82rem; }
-
-    .tab-notice { background: #fff3cd; color: #856404; border-radius: 6px;
-                  padding: 10px 16px; margin-bottom: 20px; font-size: 0.88rem; }
-
-    .filter-bar { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
-    .filter-bar a { font-size: 0.85rem; color: #0066cc; text-decoration: none; }
-    .filter-bar a.active { font-weight: 700; color: #222; text-decoration: none; }
-    .filter-bar a:hover { text-decoration: underline; }
+    .tab-notice {
+      background: var(--warn-bg); color: var(--warn-fg); border-radius: 8px;
+      padding: 10px 16px; margin-bottom: 20px; font-size: 0.88rem;
+    }
 
     .bulk-bar {
       display: flex; gap: 8px; align-items: center; margin-bottom: 12px;
-      padding: 10px 14px; background: #fff; border: 1px solid #e0e0e0;
-      border-radius: 6px; flex-wrap: wrap;
+      padding: 10px 14px; background: var(--surface); border: 1px solid var(--border);
+      border-radius: 8px; flex-wrap: wrap; box-shadow: var(--shadow);
+      position: sticky; top: 62px; z-index: 40;   /* stays visible while scrolling rows */
     }
-    .bulk-bar .sel-count { font-size: 0.85rem; color: #555; margin-right: 6px; }
-    input[type=checkbox] { width: 15px; height: 15px; cursor: pointer; }
+    .bulk-bar .sel-count {
+      font-size: 0.85rem; color: var(--text-2); margin-right: 6px; min-width: 5.5em;
+    }
+
+    table {
+      width: 100%; border-collapse: collapse; background: var(--surface);
+      border: 1px solid var(--border); border-radius: var(--radius);
+      overflow: hidden; box-shadow: var(--shadow);
+    }
+    th {
+      background: var(--surface-2); text-align: left; padding: 9px 12px;
+      font-size: 0.8rem; color: var(--text-2); border-bottom: 1px solid var(--border);
+    }
+    td {
+      padding: 9px 12px; font-size: 0.85rem; border-bottom: 1px solid var(--border-soft);
+      vertical-align: middle;
+    }
+    tr { transition: background-color .15s ease, opacity .3s ease; }
+    tr:last-child td { border-bottom: none; }
+    tbody tr:hover { background: var(--surface-2); }
+    tbody tr:has(.row-chk:checked) { background: var(--sel-bg); }
+    tr.status-applied { opacity: 0.55; }
+    tr.status-skipped { opacity: 0.45; }
+
+    .score { font-size: 0.78rem; color: var(--text-3); }
+    .match-name { font-weight: 500; }
+    .no-match { color: var(--text-3); font-style: italic; font-size: 0.82rem; }
+    .row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+    .empty-state { color: var(--text-3); padding: 32px 0; text-align: center; }
+
+    /* ── Mobile: collapse the table into stacked cards ── */
+    @media (max-width: 720px) {
+      table, tbody { display: block; border: none; box-shadow: none; background: none; }
+      thead { display: none; }   /* select-all moves into the bulk bar */
+      tr {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 4px 12px;
+        background: var(--surface); border: 1px solid var(--border);
+        border-radius: var(--radius); box-shadow: var(--shadow);
+        padding: 12px 14px; margin-bottom: 10px;
+        align-items: start;
+      }
+      td { display: block; padding: 0; border: none; font-size: 0.88rem; }
+      td.cell-check { grid-row: 1; grid-column: 1; padding-top: 2px; }
+      td.cell-title { grid-row: 1; grid-column: 2; font-weight: 600; line-height: 1.35; }
+      td.cell-date, td.cell-price, td.cell-seller, td.cell-match, td.cell-status {
+        grid-column: 2;
+      }
+      td.cell-date::before   { content: "Ordered "; color: var(--text-3); }
+      td.cell-price          { font-weight: 700; color: var(--price); }
+      td.cell-seller::before { content: "Sold by "; color: var(--text-3); }
+      td.cell-match::before  { content: "Match: "; color: var(--text-3); }
+      td.cell-status { margin-top: 2px; }
+      td.cell-actions { grid-column: 1 / -1; margin-top: 8px; }
+      td.cell-actions:empty { display: none; }
+      .row-actions { gap: 8px; }
+      .row-actions form { flex: 1; }
+      .row-actions .btn { width: 100%; }
+
+      .bulk-bar { top: 0; }
+      .bulk-bar .btn { flex: 1; padding: 10px 8px; font-size: 0.82rem; }
+      #chk-all-mobile { display: inline-block; }
+    }
+    /* Desktop: hide the mobile select-all (the thead one is visible) */
+    #chk-all-mobile-label { display: none; }
+    @media (max-width: 720px) {
+      #chk-all-mobile-label {
+        display: flex; align-items: center; gap: 6px;
+        font-size: 0.82rem; color: var(--text-2);
+      }
+    }
   </style>
 </head>
 <body>
@@ -128,7 +158,7 @@
       → "Your Orders" → confirm by email → download the archive (can take days
       to weeks) → unzip → <strong>Retail.OrderHistory.1.csv</strong>.</p>
 
-    <p style="color:#777">Either CSV works — the importer auto-detects the column
+    <p style="color:var(--text-3)">Either CSV works — the importer auto-detects the column
       layout. Re-uploading the same file is safe; known order lines are skipped.</p>
 
     <form method="post" action="/api/amazon/import" enctype="multipart/form-data">
@@ -179,6 +209,9 @@
   </form>
 
   <div class="bulk-bar">
+    <label id="chk-all-mobile-label">
+      <input type="checkbox" id="chk-all-mobile" title="Select all"> All
+    </label>
     <span class="sel-count" id="sel-count">0 selected</span>
     <button type="button" class="btn btn-skip" id="btn-bulk-skip" disabled
             onclick="submitBulk('/api/amazon/bulk-skip')">✗ Skip selected</button>
@@ -204,18 +237,18 @@
       <tbody>
       {% for o in orders %}
         <tr class="status-{{ o.status }}">
-          <td><input type="checkbox" class="row-chk" value="{{ o.id }}"></td>
-          <td style="white-space:nowrap">{{ o.order_date }}</td>
-          <td>{{ o.title | e }}</td>
-          <td style="white-space:nowrap">
+          <td class="cell-check"><input type="checkbox" class="row-chk" value="{{ o.id }}"></td>
+          <td class="cell-date" style="white-space:nowrap">{{ o.order_date }}</td>
+          <td class="cell-title">{{ o.title | e }}</td>
+          <td class="cell-price" style="white-space:nowrap">
             {% if o.unit_price %}
               {{ "%.2f" | format(o.unit_price) }} {{ o.currency }}
             {% else %}
-              <span style="color:#aaa">—</span>
+              <span style="color:var(--text-3)">—</span>
             {% endif %}
           </td>
-          <td>{{ o.seller | e if o.seller else "—" }}</td>
-          <td>
+          <td class="cell-seller">{{ o.seller | e if o.seller else "—" }}</td>
+          <td class="cell-match">
             {% if o.homebox_id %}
               <span class="match-name">{{ o.homebox_name | e }}</span>
               <span class="score">&nbsp;({{ "%.0f" | format(o.match_score * 100) }}%)</span>
@@ -223,17 +256,19 @@
               <span class="no-match">No match found</span>
             {% endif %}
           </td>
-          <td><span class="badge badge-{{ o.status }}">{{ o.status }}</span></td>
-          <td>
+          <td class="cell-status"><span class="badge badge-{{ o.status }}">{{ o.status }}</span></td>
+          <td class="cell-actions">
             {% if o.status in ('matched', 'unmatched') %}
-              {% if o.homebox_id and o.unit_price %}
-                <form method="post" action="/api/amazon/{{ o.id }}/apply" style="display:inline">
-                  <button class="btn btn-apply">✓ Apply</button>
+              <div class="row-actions">
+                {% if o.homebox_id and o.unit_price %}
+                  <form method="post" action="/api/amazon/{{ o.id }}/apply">
+                    <button class="btn btn-apply">✓ Apply</button>
+                  </form>
+                {% endif %}
+                <form method="post" action="/api/amazon/{{ o.id }}/skip">
+                  <button class="btn btn-skip">✗ Skip</button>
                 </form>
-              {% endif %}
-              <form method="post" action="/api/amazon/{{ o.id }}/skip" style="display:inline;margin-left:4px">
-                <button class="btn btn-skip">✗ Skip</button>
-              </form>
+              </div>
             {% endif %}
           </td>
         </tr>
@@ -242,7 +277,7 @@
     </table>
 
   {% else %}
-    <div style="color:#888;padding:32px 0;text-align:center">
+    <div class="empty-state">
       No orders imported yet — upload a CSV above to get started.
     </div>
   {% endif %}
@@ -251,6 +286,7 @@
 
 <script>
   const chkAll = document.getElementById('chk-all');
+  const chkAllMobile = document.getElementById('chk-all-mobile');
   const selCount = document.getElementById('sel-count');
   const btnSkip = document.getElementById('btn-bulk-skip');
   const btnApply = document.getElementById('btn-bulk-apply');
@@ -266,19 +302,20 @@
     btnApply.disabled = off;
     btnCreate.disabled = off;
     bulkIds.value = checked.map(c => c.value).join(',');
-    if (chkAll) {
-      const all = document.querySelectorAll('.row-chk');
-      chkAll.indeterminate = n > 0 && n < all.length;
-      chkAll.checked = n > 0 && n === all.length;
+    const all = document.querySelectorAll('.row-chk');
+    for (const box of [chkAll, chkAllMobile]) {
+      if (!box) continue;
+      box.indeterminate = n > 0 && n < all.length;
+      box.checked = n > 0 && n === all.length;
     }
   }
 
-  if (chkAll) {
-    chkAll.addEventListener('change', () => {
-      document.querySelectorAll('.row-chk').forEach(c => c.checked = chkAll.checked);
-      updateBulkBar();
-    });
+  function toggleAll(source) {
+    document.querySelectorAll('.row-chk').forEach(c => c.checked = source.checked);
+    updateBulkBar();
   }
+  if (chkAll) chkAll.addEventListener('change', () => toggleAll(chkAll));
+  if (chkAllMobile) chkAllMobile.addEventListener('change', () => toggleAll(chkAllMobile));
 
   document.querySelectorAll('.row-chk').forEach(c => c.addEventListener('change', updateBulkBar));
 
